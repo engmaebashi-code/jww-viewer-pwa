@@ -77,16 +77,16 @@ canvas{display:block}
 <body>
 <div id="hdr">
   <h1>JWW Viewer</h1>
-  <button class="btn open" onclick="document.getElementById('filein').click()">📂 開く</button>
+  <button class="btn open" onclick="document.getElementById('filein').click()">ð éã</button>
   <input type="file" id="filein" accept=".jww" style="display:none" onchange="loadFile(this.files[0])">
   <div class="sep"></div>
-  <button class="btn on" id="bv" onclick="setMode('view')">🖱表示</button>
-  <button class="btn" id="bm" onclick="setMode('measure')">📐計測</button>
-  <button class="btn" onclick="fitView()">⊡全体</button>
+  <button class="btn on" id="bv" onclick="setMode('view')">ð±è¡¨ç¤º</button>
+  <button class="btn" id="bm" onclick="setMode('measure')">ðè¨æ¸¬</button>
+  <button class="btn" onclick="fitView()">â¡å¨ä½</button>
   <div class="sep"></div>
-  <span style="font-size:10px;color:#8b949e;flex-shrink:0">縮尺</span>
+  <span style="font-size:10px;color:#8b949e;flex-shrink:0">ç¸®å°º</span>
   <select id="scalesel" onchange="sf=parseFloat(this.value);clearMs()">
-    <option value="1">生(mm)</option>
+    <option value="1">ç(mm)</option>
     <option value="100" selected>1/100</option>
     <option value="50">1/50</option>
     <option value="200">1/200</option>
@@ -95,38 +95,38 @@ canvas{display:block}
     <option value="500">1/500</option>
   </select>
   <div class="sep"></div>
-  <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">線</div>
-  <div class="lbtn on" id="tbtn_arc" style="color:#a8e6cf;border-color:#a8e6cf" onclick="tog('arc',this)">円弧</div>
-  <div class="lbtn on" id="tbtn_text" style="color:#ffd700;border-color:#ffd700" onclick="tog('text',this)">文字</div>
+  <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">ç·</div>
+  <div class="lbtn on" id="tbtn_arc" style="color:#a8e6cf;border-color:#a8e6cf" onclick="tog('arc',this)">åå¼§</div>
+  <div class="lbtn on" id="tbtn_text" style="color:#ffd700;border-color:#ffd700" onclick="tog('text',this)">æå­</div>
   <div class="sep"></div>
   <label style="font-size:10px;color:#8b949e;display:flex;align-items:center;gap:3px;flex-shrink:0">
-    <input type="checkbox" id="snp" checked>スナップ
+    <input type="checkbox" id="snp" checked>ã¹ããã
   </label>
   <span id="fname" style="font-size:10px;color:#6e7681;margin-left:8px;flex-shrink:0"></span>
 </div>
 <div id="wrap"><canvas id="cv"></canvas></div>
 <div id="sni"></div>
 <div id="mbox">
-  <h3>📐 スナップ計測</h3>
+  <h3>ð ã¹ãããè¨æ¸¬</h3>
   <div id="dval">---</div>
-  <div id="dunit">端点に自動吸着</div>
+  <div id="dunit">ç«¯ç¹ã«èªåå¸ç</div>
   <div id="ddet"></div>
-  <div id="dhint">① 1点目をクリック</div>
-  <button class="btn" style="margin-top:8px;width:100%" onclick="clearMs()">クリア(ESC)</button>
+  <div id="dhint">â  1ç¹ç®ãã¯ãªãã¯</div>
+  <button class="btn" style="margin-top:8px;width:100%" onclick="clearMs()">ã¯ãªã¢(ESC)</button>
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer v11</h2>
-    <p>Jw_cad図面ビューア<br>JWWファイルを開いて閲覧・計測できます<br>
-    <small style="color:#6e7681">ペン太さ・レイヤー色対応</small></p>
-    <button class="open-large" onclick="document.getElementById('filein').click()">📂 JWWファイルを開く</button>
+    <h2>JWW Viewer v12</h2>
+    <p>Jw_cadå³é¢ãã¥ã¼ã¢<br>JWWãã¡ã¤ã«ãéãã¦é²è¦§ã»è¨æ¸¬ã§ãã¾ã<br>
+    <small style="color:#6e7681">ãã³å¤ªãã»ã¬ã¤ã¤ã¼è²å¯¾å¿</small></p>
+    <button class="open-large" onclick="document.getElementById('filein').click()">ð JWWãã¡ã¤ã«ãéã</button>
   </div>
 </div>
-<div id="loading">📐 解析中...</div>
+<div id="loading">ð è§£æä¸­...</div>
 <div id="stbar">
-  モード:<span class="v" id="sm">表示</span>
-  &nbsp;座標:<span class="v" id="sp">---</span>
-  &nbsp;ズーム:<span class="v" id="sz">1x</span>
+  ã¢ã¼ã:<span class="v" id="sm">è¡¨ç¤º</span>
+  &nbsp;åº§æ¨:<span class="v" id="sp">---</span>
+  &nbsp;ãºã¼ã :<span class="v" id="sz">1x</span>
 </div>
 
 <script>
@@ -193,17 +193,15 @@ function parseJWW(buffer) {
   const len = data.length;
 
   const sig = String.fromCharCode(...data.slice(0, 7));
-  if (sig !== 'JwwData') throw new Error('JWWファイルではありません');
+  if (sig !== 'JwwData') throw new Error('JWWãã¡ã¤ã«ã§ã¯ããã¾ãã');
 
   const co = detectOffset(data, view, len); // coordinate offset (15 or 17)
   const lines = [];
   const arcs = [];
   const texts = [];
-  const decoder = new TextDecoder('shift_jis');
+  const sjis = new TextDecoder('shift_jis');
 
-  // Scan for line records (marker 0x01, 0x80)
-  // v2xx: marker(2) + 13bytes + x1(8)+y1(8)+x2(8)+y2(8) = 47 bytes
-  // v7xx: marker(2) + 15bytes + x1(8)+y1(8)+x2(8)+y2(8) = 49 bytes
+  // Scan for line records (marker 0x01 0x80 - same for all versions)
   const lineSize = co + 32;
   for (let i = 0; i < len - lineSize; i++) {
     if (data[i] === 0x01 && data[i + 1] === 0x80) {
@@ -211,72 +209,79 @@ function parseJWW(buffer) {
       const y1 = view.getFloat64(i + co + 8, true);
       const x2 = view.getFloat64(i + co + 16, true);
       const y2 = view.getFloat64(i + co + 24, true);
-
       if (isFinite(x1) && isFinite(y1) && isFinite(x2) && isFinite(y2) &&
           Math.abs(x1) < 50000 && Math.abs(y1) < 50000 &&
           Math.abs(x2) < 50000 && Math.abs(y2) < 50000) {
         const lineLen = Math.hypot(x2 - x1, y2 - y1);
         if (lineLen > 0.01 && lineLen < 100000) {
-          const pen = data[i + 6];    // pen number (line weight)
-          const layer = data[i + 7];  // layer number (color)
-          lines.push({ x1, y1, x2, y2, pen, layer });
+          lines.push({ x1, y1, x2, y2, pen: data[i+6], layer: data[i+7] });
         }
       }
     }
   }
 
-  // Scan for arc records (marker 0xCA, 0x80)
+  // Scan for arc records (BOTH markers: 0xCA and 0x24)
   const arcSize = co + 40;
   for (let i = 0; i < len - arcSize; i++) {
-    if (data[i] === 0xCA && data[i + 1] === 0x80) {
+    if ((data[i] === 0xCA || data[i] === 0x24) && data[i + 1] === 0x80) {
       const cx = view.getFloat64(i + co, true);
       const cy = view.getFloat64(i + co + 8, true);
       const r = view.getFloat64(i + co + 16, true);
       const sa = view.getFloat64(i + co + 24, true);
       const sweep = view.getFloat64(i + co + 32, true);
-
       if (isFinite(cx) && isFinite(cy) && isFinite(r) && isFinite(sa) && isFinite(sweep) &&
-          Math.abs(cx) < 50000 && Math.abs(cy) < 50000 &&
-          r > 0 && r < 50000) {
+          Math.abs(cx) < 50000 && Math.abs(cy) < 50000 && r > 0 && r < 50000) {
         const ea = sa + sweep;
         const isCircle = Math.abs(Math.abs(sweep) - Math.PI * 2) < 0.01;
-        const pen = data[i + 6];
-        const layer = data[i + 7];
-        arcs.push({ cx, cy, r, sa, ea, cat: isCircle ? 'circle' : 'arc', pen, layer });
+        arcs.push({ cx, cy, r, sa, ea, cat: isCircle ? 'circle' : 'arc', pen: data[i+6], layer: data[i+7] });
       }
     }
   }
 
-  // Scan for text records (marker 0x0F, 0x80)
-  const textDelta = co - 15; // 0 for v2xx, 2 for v7xx
-  for (let i = 0; i < len - (85 + textDelta); i++) {
-    if (data[i] === 0x0F && data[i + 1] === 0x80) {
+  // Scan for text records (BOTH markers: 0x0F and 0x0E)
+  // Supports both Shift-JIS (old) and UTF-16LE (new) encoding
+  const td = co - 15; // textDelta: 0 for co=15, 2 for co=17
+  const fontBase = 83 + td;
+  for (let i = 0; i < len - (fontBase + 20); i++) {
+    if ((data[i] === 0x0F || data[i] === 0x0E) && data[i + 1] === 0x80) {
       try {
         const x1 = view.getFloat64(i + co, true);
         const y1 = view.getFloat64(i + co + 8, true);
-        const szW = view.getFloat64(i + 51 + textDelta, true);
-        const szH = view.getFloat64(i + 59 + textDelta, true);
-
+        const szW = view.getFloat64(i + 51 + td, true);
+        const szH = view.getFloat64(i + 59 + td, true);
         if (!isFinite(x1) || !isFinite(y1) || !isFinite(szW) || !isFinite(szH)) continue;
         if (Math.abs(x1) > 50000 || Math.abs(y1) > 50000) continue;
         if (szW <= 0 || szW > 1000 || szH <= 0 || szH > 1000) continue;
 
-        const fontLen = data[i + 83 + textDelta];
-        if (fontLen > 100) continue;
-        const textLenOff = i + 84 + textDelta + fontLen;
-        if (textLenOff >= len) continue;
-        const textLen = data[textLenOff];
-        if (textLen === 0 || textLen > 500) continue;
-        const textStart = textLenOff + 1;
-        if (textStart + textLen > len) continue;
-
-        const textBytes = data.slice(textStart, textStart + textLen);
         let text;
-        try { text = decoder.decode(textBytes); } catch (e) { continue; }
-        if (text.length === 0) continue;
-
-        const layer = data[i + 7];
-        texts.push({ x: x1, y: y1, sz: Math.max(szW, szH), text, layer });
+        const fb = i + fontBase;
+        if (fb + 4 < len && data[fb] === 0xFF && data[fb+1] === 0xFE && data[fb+2] === 0xFF) {
+          // UTF-16LE encoding: FFFE FF [charCount] [UTF-16LE font] FFFE FF [charCount] [UTF-16LE text]
+          const fontChars = data[fb + 3];
+          if (fontChars > 50) continue;
+          const textPre = fb + 4 + fontChars * 2;
+          if (textPre + 4 >= len) continue;
+          if (data[textPre] !== 0xFF || data[textPre+1] !== 0xFE) continue;
+          const textChars = data[textPre + 3];
+          if (textChars === 0 || textChars > 250) continue;
+          const ts = textPre + 4;
+          if (ts + textChars * 2 > len) continue;
+          const tb = data.slice(ts, ts + textChars * 2);
+          try { text = new TextDecoder('utf-16le').decode(tb); } catch(e) { continue; }
+        } else {
+          // Shift-JIS encoding: [fontLen] [font bytes] [textLen] [text bytes]
+          const fontLen = data[fb];
+          if (fontLen > 100) continue;
+          const tlo = fb + 1 + fontLen;
+          if (tlo >= len) continue;
+          const textLen = data[tlo];
+          if (textLen === 0 || textLen > 500) continue;
+          const ts = tlo + 1;
+          if (ts + textLen > len) continue;
+          try { text = sjis.decode(data.slice(ts, ts + textLen)); } catch(e) { continue; }
+        }
+        if (!text || text.length === 0) continue;
+        texts.push({ x: x1, y: y1, sz: Math.max(szW, szH), text, layer: data[i+7] });
       } catch (e) { continue; }
     }
   }
@@ -417,7 +422,7 @@ function draw() {
       const fs = Math.max(6, Math.min(22, t.sz * sc * 0.85));
       if (fs < 6) return;
       const color = LAYER_COLORS[t.layer % LAYER_COLORS.length] || '#ffd700';
-      ctx.font = `${fs}px "MS Gothic","ＭＳ ゴシック",monospace`;
+      ctx.font = `${fs}px "MS Gothic","ï¼­ï¼³ ã´ã·ãã¯",monospace`;
       ctx.save();
       ctx.translate(s.x, s.y);
       ctx.lineWidth = 2.5; ctx.strokeStyle = '#0d1117';
@@ -432,14 +437,14 @@ function draw() {
   if (pts.length >= 1) {
     const s1 = S(pts[0].x, pts[0].y);
     ctx.fillStyle = '#f0883e'; ctx.beginPath(); ctx.arc(s1.x, s1.y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.fillText('①', s1.x + 7, s1.y - 2);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.fillText('â ', s1.x + 7, s1.y - 2);
   }
   if (pts.length >= 2) {
     const s1 = S(pts[0].x, pts[0].y), s2 = S(pts[1].x, pts[1].y);
     ctx.strokeStyle = '#f0883e'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
     ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = '#3fb950'; ctx.beginPath(); ctx.arc(s2.x, s2.y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillText('②', s2.x + 7, s2.y - 2);
+    ctx.fillStyle = '#fff'; ctx.fillText('â¡', s2.x + 7, s2.y - 2);
     const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
     const mm = Math.sqrt(dx * dx + dy * dy) * sf;
     const mx = (s1.x + s2.x) / 2, my = (s1.y + s2.y) / 2;
@@ -470,14 +475,14 @@ function loadFile(file) {
 
       document.getElementById('splash').style.display = 'none';
       document.getElementById('fname').textContent = file.name +
-        ' (線:' + LINES.length + ' 弧:' + ARCS.length + ' 字:' + TEXTS.length + ')';
+        ' (ç·:' + LINES.length + ' å¼§:' + ARCS.length + ' å­:' + TEXTS.length + ')';
 
       loading.style.display = 'none';
       resize();
       fitView();
     } catch (err) {
       loading.style.display = 'none';
-      alert('読み込みエラー: ' + err.message);
+      alert('èª­ã¿è¾¼ã¿ã¨ã©ã¼: ' + err.message);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -495,24 +500,24 @@ function setMode(m) {
 function clearMs() {
   pts = [];
   document.getElementById('dval').textContent = '---';
-  document.getElementById('dunit').textContent = '端点に自動吸着';
+  document.getElementById('dunit').textContent = 'ç«¯ç¹ã«èªåå¸ç';
   document.getElementById('ddet').textContent = '';
-  document.getElementById('dhint').textContent = '① 1点目をクリック';
+  document.getElementById('dhint').textContent = 'â  1ç¹ç®ãã¯ãªãã¯';
   draw();
 }
 function doMeasure(sx, sy) {
   const sn = snapPt(sx, sy);
   pts.push(sn ? { x: sn.wx, y: sn.wy } : W(sx, sy));
   if (pts.length === 1) {
-    document.getElementById('dhint').textContent = '② 2点目をクリック' + (sn ? ' ✓' : '');
+    document.getElementById('dhint').textContent = 'â¡ 2ç¹ç®ãã¯ãªãã¯' + (sn ? ' â' : '');
     draw();
   } else if (pts.length === 2) {
     const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
     const mm = Math.sqrt(dx * dx + dy * dy) * sf;
     document.getElementById('dval').textContent = Math.round(mm);
     document.getElementById('dunit').textContent = 'mm (1/' + sf + ')';
-    document.getElementById('ddet').innerHTML = 'ΔX: ' + Math.round(Math.abs(dx * sf)) + 'mm<br>ΔY: ' + Math.round(Math.abs(dy * sf)) + 'mm';
-    document.getElementById('dhint').textContent = 'ESCでクリア';
+    document.getElementById('ddet').innerHTML = 'ÎX: ' + Math.round(Math.abs(dx * sf)) + 'mm<br>ÎY: ' + Math.round(Math.abs(dy * sf)) + 'mm';
+    document.getElementById('dhint').textContent = 'ESCã§ã¯ãªã¢';
     draw();
   }
 }
