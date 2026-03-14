@@ -123,6 +123,11 @@ canvas{display:block}
   </div>
 </div>
 <div id="loading">📐 解析中...</div>
+<div id="stbar">
+  モード:<span class="v" id="sm">表示</span>
+  &nbsp;座標:<span class="v" id="sp">---</span>
+  &nbsp;ズーム:<span class="v" id="sz">1x</span>
+</div>
 
 <script>
 // ===== JWW Layer Colors (dark background optimized) =====
@@ -417,9 +422,8 @@ function draw() {
     ctx.strokeStyle = '#0d1117'; ctx.lineWidth = 3; ctx.strokeText(Math.round(mm) + 'mm', mx + 3, my - 8);
     ctx.fillStyle = '#3fb950'; ctx.fillText(Math.round(mm) + 'mm', mx + 3, my - 8);
     pts = [];
-  }
-
-  document.getElementById('sz').textContent = sc.toFixed(1) + 'x';
+  const szEl = document.getElementById('sz');
+  if (szEl) szEl.textContent = sc.toFixed(1) + 'x';
 }
 
 // ===== File Loading =====
@@ -546,10 +550,5 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 </script>
-<div id="stbar">
-  モード:<span class="v" id="sm">表示</span>
-  &nbsp;座標:<span class="v" id="sp">---</span>
-  &nbsp;ズーム:<span class="v" id="sz">1x</span>
-</div>
 </body>
 </html>
