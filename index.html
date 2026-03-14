@@ -77,56 +77,56 @@ canvas{display:block}
 <body>
 <div id="hdr">
   <h1>JWW Viewer</h1>
-  <button class="btn open" onclick="document.getElementById('filein').click()">ð éã</button>
+  <button class="btn open" onclick="document.getElementById('filein').click()">📂 開く</button>
   <input type="file" id="filein" accept=".jww" style="display:none" onchange="loadFile(this.files[0])">
   <div class="sep"></div>
-  <button class="btn on" id="bv" onclick="setMode('view')">ð±è¡¨ç¤º</button>
-  <button class="btn" id="bm" onclick="setMode('measure')">ðè¨æ¸¬</button>
-  <button class="btn" onclick="fitView()">â¡å¨ä½</button>
+  <button class="btn on" id="bv" onclick="setMode('view')">🖱表示</button>
+  <button class="btn" id="bm" onclick="setMode('measure')">📐計測</button>
+  <button class="btn" onclick="fitView()">⊡全体</button>
   <div class="sep"></div>
-  <span style="font-size:10px;color:#8b949e;flex-shrink:0">ç¸®å°º</span>
+  <span style="font-size:10px;color:#8b949e;flex-shrink:0">縮尺</span>
   <select id="scalesel" onchange="sf=parseFloat(this.value);clearMs()">
-    <option value="1">ç(mm)</option>
+    <option value="1">生(mm)</option>
     <option value="100" selected>1/100</option>
     <option value="50">1/50</option>
     <option value="200">1/200</option>
-    <option value="250">1/250</option>
+    <option value="2500</option>
     <option value="300">1/300</option>
     <option value="500">1/500</option>
   </select>
   <div class="sep"></div>
-  <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">ç·</div>
-  <div class="lbtn on" id="tbtn_arc" style="color:#a8e6cf;border-color:#a8e6cf" onclick="tog('arc',this)">åå¼§</div>
-  <div class="lbtn on" id="tbtn_text" style="color:#ffd700;border-color:#ffd700" onclick="tog('text',this)">æå­</div>
+  <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">線</div>
+  <div class="lbtn on" id="tbtn_arc" style="color:#a8e6cf;border-color:#a8e6cf" onclick="tog('arc',this)">円弧</div>
+  <div class="lbtn on" id="tbtn_text" style="color:#ffd700;border-color:#ffd700" onclick="tog('text',this)">文字</div>
   <div class="sep"></div>
   <label style="font-size:10px;color:#8b949e;display:flex;align-items:center;gap:3px;flex-shrink:0">
-    <input type="checkbox" id="snp" checked>ã¹ããã
+    <input type="checkbox" id="snp" checked>スナップ
   </label>
   <span id="fname" style="font-size:10px;color:#6e7681;margin-left:8px;flex-shrink:0"></span>
 </div>
 <div id="wrap"><canvas id="cv"></canvas></div>
 <div id="sni"></div>
 <div id="mbox">
-  <h3>ð ã¹ãããè¨æ¸¬</h3>
+  <h3>📐 スナップ計測</h3>
   <div id="dval">---</div>
-  <div id="dunit">ç«¯ç¹ã«èªåå¸ç</div>
+  <div id="dunit">端点に自動吸着</div>
   <div id="ddet"></div>
-  <div id="dhint">â  1ç¹ç®ãã¯ãªãã¯</div>
-  <button class="btn" style="margin-top:8px;width:100%" onclick="clearMs()">ã¯ãªã¢(ESC)</button>
+  <div id="dhint">① 1点目をクリック</div>
+  <button class="btn" style="margin-top:8px;width:100%" onclick="clearMs()">クリア(ESC)</button>
 </div>
 <div id="splash">
   <div id="splash-inner">
     <h2>JWW Viewer v12</h2>
-    <p>Jw_cadå³é¢ãã¥ã¼ã¢<br>JWWãã¡ã¤ã«ãéãã¦é²è¦§ã»è¨æ¸¬ã§ãã¾ã<br>
-    <small style="color:#6e7681">ãã³å¤ªãã»ã¬ã¤ã¤ã¼è²å¯¾å¿</small></p>
-    <button class="open-large" onclick="document.getElementById('filein').click()">ð JWWãã¡ã¤ã«ãéã</button>
+    <p>Jw_cad図面ビューア<br>JWWファイルを開いて閲覧・計測できます<br>
+    <small style="color:#6e7681">ペン太さ・レイヤー色対応</small></p>
+    <button class="open-large" onclick="document.getElementById('filein').click()">📂 JWWファイルを開く</button>
   </div>
 </div>
-<div id="loading">ð è§£æä¸­...</div>
+<div id="loading">📐 解析中...</div>
 <div id="stbar">
-  ã¢ã¼ã:<span class="v" id="sm">è¡¨ç¤º</span>
-  &nbsp;åº§æ¨:<span class="v" id="sp">---</span>
-  &nbsp;ãºã¼ã :<span class="v" id="sz">1x</span>
+  モード:<span class="v" id="sm">表示</span>
+  &nbsp;座標:<span class="v" id="sp">---</span>
+  &nbsp;ズーム:<span class="v" id="sz">1x</span>
 </div>
 
 <script>
@@ -193,7 +193,7 @@ function parseJWW(buffer) {
   const len = data.length;
 
   const sig = String.fromCharCode(...data.slice(0, 7));
-  if (sig !== 'JwwData') throw new Error('JWWãã¡ã¤ã«ã§ã¯ããã¾ãã');
+  if (sig !== 'JwwData') throw new Error('JWWファイルではありません');
 
   const co = detectOffset(data, view, len); // coordinate offset (15 or 17)
   const lines = [];
@@ -422,7 +422,7 @@ function draw() {
       const fs = Math.max(6, Math.min(22, t.sz * sc * 0.85));
       if (fs < 6) return;
       const color = LAYER_COLORS[t.layer % LAYER_COLORS.length] || '#ffd700';
-      ctx.font = `${fs}px "MS Gothic","ï¼­ï¼³ ã´ã·ãã¯",monospace`;
+      ctx.font = `${fs}px "MS Gothic","ＭＳ ゴシック",monospace`;
       ctx.save();
       ctx.translate(s.x, s.y);
       ctx.lineWidth = 2.5; ctx.strokeStyle = '#0d1117';
@@ -437,14 +437,14 @@ function draw() {
   if (pts.length >= 1) {
     const s1 = S(pts[0].x, pts[0].y);
     ctx.fillStyle = '#f0883e'; ctx.beginPath(); ctx.arc(s1.x, s1.y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.fillText('â ', s1.x + 7, s1.y - 2);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px monospace'; ctx.fillText('①', s1.x + 7, s1.y - 2);
   }
   if (pts.length >= 2) {
     const s1 = S(pts[0].x, pts[0].y), s2 = S(pts[1].x, pts[1].y);
     ctx.strokeStyle = '#f0883e'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
     ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = '#3fb950'; ctx.beginPath(); ctx.arc(s2.x, s2.y, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillText('â¡', s2.x + 7, s2.y - 2);
+    ctx.fillStyle = '#fff'; ctx.fillText('②', s2.x + 7, s2.y - 2);
     const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
     const mm = Math.sqrt(dx * dx + dy * dy) * sf;
     const mx = (s1.x + s2.x) / 2, my = (s1.y + s2.y) / 2;
@@ -475,14 +475,14 @@ function loadFile(file) {
 
       document.getElementById('splash').style.display = 'none';
       document.getElementById('fname').textContent = file.name +
-        ' (ç·:' + LINES.length + ' å¼§:' + ARCS.length + ' å­:' + TEXTS.length + ')';
+        ' (線:' + LINES.length + ' 弧:' + ARCS.length + ' 字:' + TEXTS.length + ')';
 
       loading.style.display = 'none';
       resize();
       fitView();
     } catch (err) {
       loading.style.display = 'none';
-      alert('èª­ã¿è¾¼ã¿ã¨ã©ã¼: ' + err.message);
+      alert('読み込みエラー: ' + err.message);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -500,24 +500,24 @@ function setMode(m) {
 function clearMs() {
   pts = [];
   document.getElementById('dval').textContent = '---';
-  document.getElementById('dunit').textContent = 'ç«¯ç¹ã«èªåå¸ç';
+  document.getElementById('dunit').textContent = '端点に自動吸着';
   document.getElementById('ddet').textContent = '';
-  document.getElementById('dhint').textContent = 'â  1ç¹ç®ãã¯ãªãã¯';
+  document.getElementById('dhint').textContent = '① 1点目をクリック';
   draw();
 }
 function doMeasure(sx, sy) {
   const sn = snapPt(sx, sy);
   pts.push(sn ? { x: sn.wx, y: sn.wy } : W(sx, sy));
   if (pts.length === 1) {
-    document.getElementById('dhint').textContent = 'â¡ 2ç¹ç®ãã¯ãªãã¯' + (sn ? ' â' : '');
+    document.getElementById('dhint').textContent = '② 2点目をクリック' + (sn ? ' ✓' : '');
     draw();
   } else if (pts.length === 2) {
     const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
     const mm = Math.sqrt(dx * dx + dy * dy) * sf;
     document.getElementById('dval').textContent = Math.round(mm);
     document.getElementById('dunit').textContent = 'mm (1/' + sf + ')';
-    document.getElementById('ddet').innerHTML = 'ÎX: ' + Math.round(Math.abs(dx * sf)) + 'mm<br>ÎY: ' + Math.round(Math.abs(dy * sf)) + 'mm';
-    document.getElementById('dhint').textContent = 'ESCã§ã¯ãªã¢';
+    document.getElementById('ddet').innerHTML = 'ΔX: ' + Math.round(Math.abs(dx * sf)) + 'mm<br>ΔY: ' + Math.round(Math.abs(dy * sf)) + 'mm';
+    document.getElementById('dhint').textContent = 'ESCでクリア';
     draw();
   }
 }
