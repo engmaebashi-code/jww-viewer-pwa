@@ -116,7 +116,7 @@ canvas{display:block}
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer v10</h2>
+    <h2>JWW Viewer v11</h2>
     <p>Jw_cad図面ビューア<br>JWWファイルを開いて閲覧・計測できます<br>
     <small style="color:#6e7681">ペン太さ・レイヤー色対応</small></p>
     <button class="open-large" onclick="document.getElementById('filein').click()">📂 JWWファイルを開く</button>
@@ -167,6 +167,26 @@ function penWidth(pen, sc) {
 }
 
 // ===== JWW Binary Parser =====
+function detectOffset(data, view, len) {
+  // Auto-detect coordinate offset by trying both +15 and +17
+  // JWW v2xx uses 15-byte header, v7xx uses 17-byte header
+  let count15 = 0, count17 = 0;
+  const sampleLimit = Math.min(len - 49, 500000);
+  for (let i = 0; i < sampleLimit; i++) {
+    if (data[i] === 0x01 && data[i + 1] === 0x80) {
+      for (const off of [15, 17]) {
+        const x1 = view.getFloat64(i + off, true);
+        const y1 = view.getFloat64(i + off + 8, true);
+        if (isFinite(x1) && isFinite(y1) && Math.abs(x1) < 50000 && Math.abs(y1) < 50000 &&
+            (Math.abs(x1) > 0.1 || Math.abs(y1) > 0.1)) {
+          if (off === 15) count15++; else count17++;
+        }
+      }
+    }
+  }
+  return count17 > count15 ? 17 : 15;
+}
+
 function parseJWW(buffer) {
   const data = new Uint8Array(buffer);
   const view = new DataView(buffer);
@@ -175,19 +195,22 @@ function parseJWW(buffer) {
   const sig = String.fromCharCode(...data.slice(0, 7));
   if (sig !== 'JwwData') throw new Error('JWWファイルではありません');
 
+  const co = detectOffset(data, view, len); // coordinate offset (15 or 17)
   const lines = [];
   const arcs = [];
   const texts = [];
   const decoder = new TextDecoder('shift_jis');
 
-  // Scan for line records (marker 0x01, 0x80) - 47 bytes each
-  // Structure: marker(2) + 4bytes + pen(1) + layer(1) + 5bytes + x1(8) + y1(8) + x2(8) + y2(8)
-  for (let i = 0; i < len - 47; i++) {
+  // Scan for line records (marker 0x01, 0x80)
+  // v2xx: marker(2) + 13bytes + x1(8)+y1(8)+x2(8)+y2(8) = 47 bytes
+  // v7xx: marker(2) + 15bytes + x1(8)+y1(8)+x2(8)+y2(8) = 49 bytes
+  const lineSize = co + 32;
+  for (let i = 0; i < len - lineSize; i++) {
     if (data[i] === 0x01 && data[i + 1] === 0x80) {
-      const x1 = view.getFloat64(i + 15, true);
-      const y1 = view.getFloat64(i + 23, true);
-      const x2 = view.getFloat64(i + 31, true);
-      const y2 = view.getFloat64(i + 39, true);
+      const x1 = view.getFloat64(i + co, true);
+      const y1 = view.getFloat64(i + co + 8, true);
+      const x2 = view.getFloat64(i + co + 16, true);
+      const y2 = view.getFloat64(i + co + 24, true);
 
       if (isFinite(x1) && isFinite(y1) && isFinite(x2) && isFinite(y2) &&
           Math.abs(x1) < 50000 && Math.abs(y1) < 50000 &&
@@ -202,14 +225,15 @@ function parseJWW(buffer) {
     }
   }
 
-  // Scan for arc records (marker 0xCA, 0x80) - 75 bytes each
-  for (let i = 0; i < len - 75; i++) {
+  // Scan for arc records (marker 0xCA, 0x80)
+  const arcSize = co + 40;
+  for (let i = 0; i < len - arcSize; i++) {
     if (data[i] === 0xCA && data[i + 1] === 0x80) {
-      const cx = view.getFloat64(i + 15, true);
-      const cy = view.getFloat64(i + 23, true);
-      const r = view.getFloat64(i + 31, true);
-      const sa = view.getFloat64(i + 39, true);
-      const sweep = view.getFloat64(i + 47, true);
+      const cx = view.getFloat64(i + co, true);
+      const cy = view.getFloat64(i + co + 8, true);
+      const r = view.getFloat64(i + co + 16, true);
+      const sa = view.getFloat64(i + co + 24, true);
+      const sweep = view.getFloat64(i + co + 32, true);
 
       if (isFinite(cx) && isFinite(cy) && isFinite(r) && isFinite(sa) && isFinite(sweep) &&
           Math.abs(cx) < 50000 && Math.abs(cy) < 50000 &&
@@ -224,21 +248,22 @@ function parseJWW(buffer) {
   }
 
   // Scan for text records (marker 0x0F, 0x80)
-  for (let i = 0; i < len - 85; i++) {
+  const textDelta = co - 15; // 0 for v2xx, 2 for v7xx
+  for (let i = 0; i < len - (85 + textDelta); i++) {
     if (data[i] === 0x0F && data[i + 1] === 0x80) {
       try {
-        const x1 = view.getFloat64(i + 15, true);
-        const y1 = view.getFloat64(i + 23, true);
-        const szW = view.getFloat64(i + 51, true);
-        const szH = view.getFloat64(i + 59, true);
+        const x1 = view.getFloat64(i + co, true);
+        const y1 = view.getFloat64(i + co + 8, true);
+        const szW = view.getFloat64(i + 51 + textDelta, true);
+        const szH = view.getFloat64(i + 59 + textDelta, true);
 
         if (!isFinite(x1) || !isFinite(y1) || !isFinite(szW) || !isFinite(szH)) continue;
         if (Math.abs(x1) > 50000 || Math.abs(y1) > 50000) continue;
         if (szW <= 0 || szW > 1000 || szH <= 0 || szH > 1000) continue;
 
-        const fontLen = data[i + 83];
+        const fontLen = data[i + 83 + textDelta];
         if (fontLen > 100) continue;
-        const textLenOff = i + 84 + fontLen;
+        const textLenOff = i + 84 + textDelta + fontLen;
         if (textLenOff >= len) continue;
         const textLen = data[textLenOff];
         if (textLen === 0 || textLen > 500) continue;
