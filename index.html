@@ -90,6 +90,9 @@ canvas{display:block}
     <option value="100" selected>1/100</option>
     <option value="50">1/50</option>
     <option value="200">1/200</option>
+    <option value="250">1/250</option>
+    <option value="300">1/300</option>
+    <option value="500">1/500</option>
   </select>
   <div class="sep"></div>
   <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">線</div>
@@ -113,21 +116,57 @@ canvas{display:block}
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer</h2>
-    <p>Jw_cad図面ビューア<br>JWWファイルを開いて閲覧・計測できます</p>
+    <h2>JWW Viewer v10</h2>
+    <p>Jw_cad図面ビューア<br>JWWファイルを開いて閲覧・計測できます<br>
+    <small style="color:#6e7681">ペン太さ・レイヤー色対応</small></p>
     <button class="open-large" onclick="document.getElementById('filein').click()">📂 JWWファイルを開く</button>
   </div>
 </div>
 <div id="loading">📐 解析中...</div>
 
 <script>
+// ===== JWW Layer Colors (dark background optimized) =====
+const LAYER_COLORS = [
+  '#e6edf3', // Layer 0: white
+  '#58a6ff', // Layer 1: cyan/blue
+  '#3fb950', // Layer 2: green
+  '#bc8cff', // Layer 3: magenta
+  '#388bfd', // Layer 4: blue
+  '#d29922', // Layer 5: yellow
+  '#f0883e', // Layer 6: orange
+  '#f85149', // Layer 7: red
+  '#c9d1d9', // Layer 8: light gray
+  '#79c0ff', // Layer 9: light cyan
+  '#56d364', // Layer 10: light green
+  '#d2a8ff', // Layer 11: light magenta
+  '#6cb6ff', // Layer 12: medium blue
+  '#e3b341', // Layer 13: gold
+  '#ffa657', // Layer 14: light orange
+  '#ff7b72', // Layer 15: light red
+];
+
+// Pen number to line width multiplier
+function penWidth(pen, sc) {
+  const base = Math.max(0.4, sc * 0.03);
+  switch (pen) {
+    case 1: return base;
+    case 2: return base * 2.5;
+    case 3: return base * 3.5;
+    case 4: return base * 4;
+    case 5: return base * 4.5;
+    case 6: return base * 5;
+    case 7: return base * 5.5;
+    case 8: return base * 6;
+    default: return base;
+  }
+}
+
 // ===== JWW Binary Parser =====
 function parseJWW(buffer) {
   const data = new Uint8Array(buffer);
   const view = new DataView(buffer);
   const len = data.length;
 
-  // Verify JwwData header
   const sig = String.fromCharCode(...data.slice(0, 7));
   if (sig !== 'JwwData') throw new Error('JWWファイルではありません');
 
@@ -137,7 +176,7 @@ function parseJWW(buffer) {
   const decoder = new TextDecoder('shift_jis');
 
   // Scan for line records (marker 0x01, 0x80) - 47 bytes each
-  // Structure: marker(2) + header(13) + x1(8) + y1(8) + x2(8) + y2(8)
+  // Structure: marker(2) + 4bytes + pen(1) + layer(1) + 5bytes + x1(8) + y1(8) + x2(8) + y2(8)
   for (let i = 0; i < len - 47; i++) {
     if (data[i] === 0x01 && data[i + 1] === 0x80) {
       const x1 = view.getFloat64(i + 15, true);
@@ -150,16 +189,15 @@ function parseJWW(buffer) {
           Math.abs(x2) < 50000 && Math.abs(y2) < 50000) {
         const lineLen = Math.hypot(x2 - x1, y2 - y1);
         if (lineLen > 0.01 && lineLen < 100000) {
-          // Header byte 5 seems to indicate line type/weight
-          const ltype = data[i + 7]; // header byte 5
-          lines.push({ x1, y1, x2, y2, lt: ltype });
+          const pen = data[i + 6];    // pen number (line weight)
+          const layer = data[i + 7];  // layer number (color)
+          lines.push({ x1, y1, x2, y2, pen, layer });
         }
       }
     }
   }
 
   // Scan for arc records (marker 0xCA, 0x80) - 75 bytes each
-  // Structure: marker(2) + header(13) + cx(8) + cy(8) + r(8) + sa(8) + sweep(8) + extra(20)
   for (let i = 0; i < len - 75; i++) {
     if (data[i] === 0xCA && data[i + 1] === 0x80) {
       const cx = view.getFloat64(i + 15, true);
@@ -173,17 +211,14 @@ function parseJWW(buffer) {
           r > 0 && r < 50000) {
         const ea = sa + sweep;
         const isCircle = Math.abs(Math.abs(sweep) - Math.PI * 2) < 0.01;
-        arcs.push({
-          cx, cy, r, sa, ea,
-          cat: isCircle ? 'circle' : 'arc'
-        });
+        const pen = data[i + 6];
+        const layer = data[i + 7];
+        arcs.push({ cx, cy, r, sa, ea, cat: isCircle ? 'circle' : 'arc', pen, layer });
       }
     }
   }
 
-  // Scan for text records (marker 0x0F, 0x80) - variable length
-  // Structure: marker(2) + header(13) + x1(8) + y1(8) + x2(8) + y2(8) +
-  //            unknown(4) + szW(8) + szH(8) + extra(16) + fontLen(1) + font + textLen(1) + text
+  // Scan for text records (marker 0x0F, 0x80)
   for (let i = 0; i < len - 85; i++) {
     if (data[i] === 0x0F && data[i + 1] === 0x80) {
       try {
@@ -197,48 +232,32 @@ function parseJWW(buffer) {
         if (szW <= 0 || szW > 1000 || szH <= 0 || szH > 1000) continue;
 
         const fontLen = data[i + 83];
-        if (fontLen > 100) continue; // sanity check
-
+        if (fontLen > 100) continue;
         const textLenOff = i + 84 + fontLen;
         if (textLenOff >= len) continue;
         const textLen = data[textLenOff];
         if (textLen === 0 || textLen > 500) continue;
-
         const textStart = textLenOff + 1;
         if (textStart + textLen > len) continue;
 
         const textBytes = data.slice(textStart, textStart + textLen);
         let text;
-        try {
-          text = decoder.decode(textBytes);
-        } catch (e) {
-          continue;
-        }
-
-        // Filter out garbage text
+        try { text = decoder.decode(textBytes); } catch (e) { continue; }
         if (text.length === 0) continue;
 
-        texts.push({
-          x: x1, y: y1,
-          sz: Math.max(szW, szH),
-          text: text
-        });
-      } catch (e) {
-        continue;
-      }
+        const layer = data[i + 7];
+        texts.push({ x: x1, y: y1, sz: Math.max(szW, szH), text, layer });
+      } catch (e) { continue; }
     }
   }
 
-  // Build snap points from line endpoints
+  // Build snap points
   const snap = [];
   const snapSet = new Set();
   for (const l of lines) {
     for (const [x, y] of [[l.x1, l.y1], [l.x2, l.y2]]) {
       const k = Math.round(x * 10) + ',' + Math.round(y * 10);
-      if (!snapSet.has(k)) {
-        snapSet.add(k);
-        snap.push([x, y]);
-      }
+      if (!snapSet.has(k)) { snapSet.add(k); snap.push([x, y]); }
     }
   }
 
@@ -303,27 +322,44 @@ function draw() {
     }
   }
 
-  // Lines
+  // Lines - grouped by pen+layer for efficient rendering
   if (vis.line && LINES.length) {
-    ctx.strokeStyle = '#c9d1d9';
-    ctx.lineWidth = Math.max(0.6, sc * 0.04);
-    ctx.beginPath();
+    const groups = {};
     LINES.forEach(l => {
-      const p1 = S(l.x1, l.y1), p2 = S(l.x2, l.y2);
-      ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+      const key = l.pen + '_' + l.layer;
+      if (!groups[key]) groups[key] = { pen: l.pen, layer: l.layer, items: [] };
+      groups[key].items.push(l);
     });
-    ctx.stroke();
+
+    // Draw thin lines first, then thick (so thick walls render on top)
+    const sortedKeys = Object.keys(groups).sort((a, b) => groups[a].pen - groups[b].pen);
+
+    for (const key of sortedKeys) {
+      const g = groups[key];
+      const color = LAYER_COLORS[g.layer % LAYER_COLORS.length] || '#c9d1d9';
+      const lw = penWidth(g.pen, sc);
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      for (const l of g.items) {
+        const p1 = S(l.x1, l.y1), p2 = S(l.x2, l.y2);
+        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
+      }
+      ctx.stroke();
+    }
   }
 
-  // Arcs (polyline rendering)
+  // Arcs (polyline rendering) - with pen weight and layer color
   if (vis.arc && ARCS.length) {
     ARCS.forEach(a => {
       const sx = a.cx * sc + tx, sy = -a.cy * sc + ty, sr = a.r * sc;
       if (sr < 0.3) return;
       if (sx + sr < -50 || sx - sr > cv.width + 50 || sy + sr < -50 || sy - sr > cv.height + 50) return;
 
-      ctx.strokeStyle = a.cat === 'circle' ? '#a8e6cf' : '#f0883e';
-      ctx.lineWidth = a.cat === 'circle' ? Math.max(1, sc * 0.05) : Math.max(0.7, sc * 0.04);
+      const color = LAYER_COLORS[a.layer % LAYER_COLORS.length] || '#a8e6cf';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = penWidth(a.pen || 1, sc);
       ctx.beginPath();
 
       if (a.cat === 'circle') {
@@ -343,19 +379,20 @@ function draw() {
     });
   }
 
-  // Texts
+  // Texts - with layer color
   if (vis.text && sc > 0.3) {
     TEXTS.forEach(t => {
       const s = S(t.x, t.y);
       if (s.x < -200 || s.x > cv.width + 200 || s.y < -200 || s.y > cv.height + 200) return;
       const fs = Math.max(6, Math.min(22, t.sz * sc * 0.85));
       if (fs < 6) return;
+      const color = LAYER_COLORS[t.layer % LAYER_COLORS.length] || '#ffd700';
       ctx.font = `${fs}px "MS Gothic","ＭＳ ゴシック",monospace`;
       ctx.save();
       ctx.translate(s.x, s.y);
       ctx.lineWidth = 2.5; ctx.strokeStyle = '#0d1117';
       ctx.strokeText(t.text, 0, 0);
-      ctx.fillStyle = '#ffd700';
+      ctx.fillStyle = color;
       ctx.fillText(t.text, 0, 0);
       ctx.restore();
     });
@@ -502,9 +539,7 @@ document.body.addEventListener('dragover', e => { e.preventDefault(); });
 document.body.addEventListener('drop', e => {
   e.preventDefault();
   const file = e.dataTransfer.files[0];
-  if (file && file.name.toLowerCase().endsWith('.jww')) {
-    loadFile(file);
-  }
+  if (file && file.name.toLowerCase().endsWith('.jww')) { loadFile(file); }
 });
 
 if ('serviceWorker' in navigator) {
