@@ -389,9 +389,9 @@ var WORKER_CODE = function() {
     // After parsing an entity of known size, the next bytes must be a valid tag.
     // This sequential chaining eliminates false positive tag matches.
 
-    // Step 1: Parse first instances (at class definition positions) and collect tags
+    // Step 1: Parse first instances (at class definition positions)
     var senTag = -1, enkTag = -1, mojiTag = -1;
-    var streamPositions = []; // [{pos, type}] sorted by position
+    var seqStart = -1;
 
     // Parse first CDataSen
     if (senDef > 0) {
@@ -407,12 +407,11 @@ var WORKER_CODE = function() {
             if (sll > 0.001 && sll < 1e7)
               addLine(sx1, sy1, sx2, sy2, getCDLayer(cd0), getCDGlayer(cd0));
           }
-          // Get tag bytes for subsequent CDataSen
+          // senTag: read from next bytes (the next entity is always same-type CDataSen)
           var senTagPos = o + 32;
           if (senTagPos + 1 < len && (data[senTagPos+1] & 0x80)) {
             senTag = data[senTagPos] | (data[senTagPos+1] << 8);
           }
-          streamPositions.push({pos: senTagPos, defEnd: senDef});
         }
       }
     }
@@ -433,17 +432,11 @@ var WORKER_CODE = function() {
             addArc(acx, acy, ar, asa, asa+aarcA, atilt, aflat,
                    getCDLayer(cd0a), getCDGlayer(cd0a), isC);
           }
-          var enkTagPos = ao + 60;
-          if (enkTagPos + 1 < len && (data[enkTagPos+1] & 0x80)) {
-            enkTag = data[enkTagPos] | (data[enkTagPos+1] << 8);
-          }
-          streamPositions.push({pos: enkTagPos, defEnd: enkDef});
         }
       }
     }
 
     // Parse first CDataMoji
-    var mojiFirstEnd = -1;
     if (mojiDef > 0) {
       var cdm0 = parseCData(mojiDef);
       if (cdm0 >= 0) {
@@ -460,11 +453,7 @@ var WORKER_CODE = function() {
               if (textR0 && textR0.text.length > 0) {
                 texts.push({x:mx1, y:my1, sz:Math.max(msX,msY), text:textR0.text, angle:mkak,
                             layer:getCDLayer(cdm0), glayer:getCDGlayer(cdm0)});
-                mojiFirstEnd = textR0.end;
-                if (mojiFirstEnd + 1 < len && (data[mojiFirstEnd+1] & 0x80)) {
-                  mojiTag = data[mojiFirstEnd] | (data[mojiFirstEnd+1] << 8);
-                }
-                streamPositions.push({pos: mojiFirstEnd, defEnd: mojiDef});
+                seqStart = textR0.end;
               }
             }
           }
@@ -472,10 +461,66 @@ var WORKER_CODE = function() {
       }
     }
 
-    // Step 2: Sequential stream parsing from after the last class definition's first instance
-    // Sort stream positions to find the latest one
-    streamPositions.sort(function(a, b) { return a.pos - b.pos; });
-    var seqStart = streamPositions.length > 0 ? streamPositions[streamPositions.length - 1].pos : -1;
+    // If mojiDef wasn't found, start from after enkDef or senDef
+    if (seqStart < 0 && enkDef > 0) seqStart = enkDef + cdSz + 60;
+    if (seqStart < 0 && senDef > 0) seqStart = senDef + cdSz + 32;
+
+    // Step 2: Discover enkTag and mojiTag by scanning for validated entries
+    // MFC tag values depend on both class and object counts, so they vary per file.
+    // We discover them by finding validated arc/text entries and checking their tag bytes.
+    function discoverTag(type, searchStart, searchEnd) {
+      var tagCounts = {};
+      var maxTag = -1, maxCount = 0;
+      var limit = Math.min(searchEnd, searchStart + 300000);
+      for (var di = searchStart; di < limit - 80; di++) {
+        if (!(data[di+1] & 0x80)) continue;
+        var dtag = data[di] | (data[di+1] << 8);
+        if (dtag === senTag) continue; // skip known tags
+        var dcd = parseCData(di + 2);
+        if (dcd < 0) continue;
+        var dao = dcd + cdSz;
+
+        if (type === 'arc' && dao + 60 <= len) {
+          var dcx = view.getFloat64(dao, true), dcy = view.getFloat64(dao+8, true);
+          var dr = view.getFloat64(dao+16, true);
+          if (isFinite(dcx) && isFinite(dcy) && isFinite(dr) && dr > 0 && dr <= 1e7 &&
+              Math.abs(dcx) <= 1e7 && Math.abs(dcy) <= 1e7) {
+            var nextP = dao + 60;
+            if (nextP + 1 < limit && (data[nextP+1] & 0x80)) {
+              var ncd = parseCData(nextP + 2);
+              if (ncd >= 0) {
+                tagCounts[dtag] = (tagCounts[dtag] || 0) + 1;
+                if (tagCounts[dtag] > maxCount) { maxCount = tagCounts[dtag]; maxTag = dtag; }
+              }
+            }
+          }
+        }
+
+        if (type === 'text' && dao + 68 <= len) {
+          var dmx = view.getFloat64(dao, true), dmy = view.getFloat64(dao+8, true);
+          var dmsx = view.getFloat64(dao+36, true);
+          if (isFinite(dmx) && isFinite(dmy) && Math.abs(dmx)<=1e7 && Math.abs(dmy)<=1e7 &&
+              isFinite(dmsx) && dmsx > 0 && dmsx <= 10000) {
+            var dfr = readCStr(dao + 68);
+            if (dfr) {
+              var dtr = readCStr(dfr.end);
+              if (dtr && dtr.text.length > 0 && dtr.text.length < 1000) {
+                tagCounts[dtag] = (tagCounts[dtag] || 0) + 1;
+                if (tagCounts[dtag] > maxCount) { maxCount = tagCounts[dtag]; maxTag = dtag; }
+              }
+            }
+          }
+        }
+      }
+      return maxCount >= 3 ? maxTag : -1; // require at least 3 matches
+    }
+
+    if (seqStart > 0) {
+      enkTag = discoverTag('arc', seqStart, scanEnd);
+      mojiTag = discoverTag('text', seqStart, scanEnd);
+    }
+
+    // Step 3: Sequential stream parsing with discovered tags
 
     if (seqStart > 0 && seqStart < scanEnd) {
       var pos = seqStart;
@@ -571,61 +616,6 @@ var WORKER_CODE = function() {
           self.postMessage({type: 'progress', pct: pct,
             detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length});
         }
-      }
-    }
-
-    // Also handle entities between class defs (before the sequential section)
-    // These are entities that appear between class definitions
-    for (var spi = 0; spi < streamPositions.length - 1; spi++) {
-      var gapStart = streamPositions[spi].pos;
-      var gapEnd = streamPositions[spi + 1].defEnd - 20; // before next class def header
-      if (gapEnd <= gapStart) continue;
-
-      var gpos = gapStart;
-      while (gpos < gapEnd - 2) {
-        var gt = data[gpos] | (data[gpos+1] << 8);
-
-        if (gt === senTag && senTag > 0) {
-          var gscd = parseCData(gpos + 2);
-          if (gscd >= 0) {
-            var gso = gscd + cdSz;
-            if (gso + 32 <= len) {
-              var glx1 = view.getFloat64(gso, true), gly1 = view.getFloat64(gso+8, true);
-              var glx2 = view.getFloat64(gso+16, true), gly2 = view.getFloat64(gso+24, true);
-              if (isFinite(glx1) && isFinite(gly1) && isFinite(glx2) && isFinite(gly2) &&
-                  Math.abs(glx1)<1e7 && Math.abs(gly1)<1e7 && Math.abs(glx2)<1e7 && Math.abs(gly2)<1e7) {
-                var gll = Math.hypot(glx2-glx1, gly2-gly1);
-                if (gll > 0.001 && gll < 1e7)
-                  addLine(glx1, gly1, glx2, gly2, getCDLayer(gscd), getCDGlayer(gscd));
-              }
-              gpos = gso + 32;
-              continue;
-            }
-          }
-        }
-
-        if (gt === enkTag && enkTag > 0) {
-          var gacd = parseCData(gpos + 2);
-          if (gacd >= 0) {
-            var gao = gacd + cdSz;
-            if (gao + 60 <= len) {
-              var gcx = view.getFloat64(gao, true), gcy = view.getFloat64(gao+8, true);
-              var gr = view.getFloat64(gao+16, true), gsa = view.getFloat64(gao+24, true);
-              var garc = view.getFloat64(gao+32, true), gtilt = view.getFloat64(gao+40, true);
-              var gflat = view.getFloat64(gao+48, true), gfull = view.getUint32(gao+56, true);
-              if (isFinite(gcx) && isFinite(gcy) && isFinite(gr) && gr > 0 && gr <= 1e7 &&
-                  Math.abs(gcx) <= 1e7 && Math.abs(gcy) <= 1e7) {
-                var giC = gfull === 1 || Math.abs(Math.abs(garc) - Math.PI * 2) < 0.01;
-                addArc(gcx, gcy, gr, gsa, gsa+garc, gtilt, gflat,
-                       getCDLayer(gacd), getCDGlayer(gacd), giC);
-              }
-              gpos = gao + 60;
-              continue;
-            }
-          }
-        }
-
-        gpos++;
       }
     }
 

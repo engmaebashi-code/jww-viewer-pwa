@@ -1,4 +1,4 @@
-const CACHE_NAME = 'jww-viewer-v15b';
+const CACHE_NAME = 'jww-viewer-v15h';
 const ASSETS = [
   './',
   './index.html',
