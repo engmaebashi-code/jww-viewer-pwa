@@ -50,7 +50,12 @@ canvas{display:block}
   transition:all .2s}
 #splash-inner .open-large:hover{background:#2ea043;transform:scale(1.05)}
 #loading{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(13,17,23,0.9);
-  display:none;align-items:center;justify-content:center;z-index:1000;font-size:16px;color:#58a6ff}
+  display:none;align-items:center;justify-content:center;z-index:1000;
+  flex-direction:column;gap:12px}
+#loading-text{font-size:16px;color:#58a6ff}
+#loading-bar{width:280px;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
+#loading-fill{width:0%;height:100%;background:#58a6ff;border-radius:3px;transition:width .2s}
+#loading-detail{font-size:11px;color:#6e7681}
 
 /* Layer panel */
 #lpanel{position:fixed;top:44px;left:0;right:0;background:#161b22;
@@ -147,13 +152,17 @@ canvas{display:block}
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer v14</h2>
+    <h2>JWW Viewer v15</h2>
     <p>Jw_cad&#x56F3;&#x9762;&#x30D3;&#x30E5;&#x30FC;&#x30A2;<br>JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x3044;&#x3066;&#x95B2;&#x89A7;&#x30FB;&#x8A08;&#x6E2C;&#x3067;&#x304D;&#x307E;&#x3059;<br>
-    <small style="color:#6e7681">MFC&#x6E96;&#x62E0;&#x30D1;&#x30FC;&#x30B5;&#x30FC;&#x30FB;&#x30EC;&#x30A4;&#x30E4;&#x30FC;&#x5BFE;&#x5FDC;&#x30FB;&#x7E2E;&#x5C3A;&#x81EA;&#x52D5;&#x691C;&#x51FA;</small></p>
+    <small style="color:#6e7681">MFC&#x6E96;&#x62E0;&#x30D1;&#x30FC;&#x30B5;&#x30FC;&#x30FB;&#x30EC;&#x30A4;&#x30E4;&#x30FC;&#x5BFE;&#x5FDC;&#x30FB;&#x5927;&#x5BB9;&#x91CF;&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x5BFE;&#x5FDC;</small></p>
     <button class="open-large" onclick="document.getElementById('filein').click()">&#x1F4C2; JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x304F;</button>
   </div>
 </div>
-<div id="loading">&#x1F4D0; &#x89E3;&#x6790;&#x4E2D;...</div>
+<div id="loading">
+  <div id="loading-text">&#x1F4D0; &#x89E3;&#x6790;&#x4E2D;...</div>
+  <div id="loading-bar"><div id="loading-fill"></div></div>
+  <div id="loading-detail"></div>
+</div>
 <div id="stbar">
   &#x30E2;&#x30FC;&#x30C9;:<span class="v" id="sm">&#x8868;&#x793A;</span>
   &nbsp;&#x5EA7;&#x6A19;:<span class="v" id="sp">---</span>
@@ -162,6 +171,565 @@ canvas{display:block}
 </div>
 
 <script>
+// ===== Web Worker for JWW parsing (inline blob) =====
+var WORKER_CODE = function() {
+  // ===== MFC-aware JWW Binary Parser (v15 - memory optimized) =====
+  self.onmessage = function(e) {
+    try {
+      var result = parseJWW(e.data);
+      // Transfer typed arrays for zero-copy
+      var transfer = [result.lineCoords.buffer, result.lineMeta.buffer,
+                      result.lineSorted.buffer, result.lineLayerOff.buffer,
+                      result.arcData.buffer, result.arcMeta.buffer,
+                      result.arcSorted.buffer, result.arcLayerOff.buffer];
+      if (result.snapCoords) transfer.push(result.snapCoords.buffer);
+      self.postMessage({type: 'done', result: result}, transfer);
+    } catch(err) {
+      self.postMessage({type: 'error', message: err.message});
+    }
+  };
+
+  function parseJWW(buffer) {
+    var data = new Uint8Array(buffer);
+    var view = new DataView(buffer);
+    var len = data.length;
+
+    // Validate header
+    if (len < 12) throw new Error('JWW\u30D5\u30A1\u30A4\u30EB\u3067\u306F\u3042\u308A\u307E\u305B\u3093');
+    var hdr = '';
+    for (var hi = 0; hi < 7; hi++) hdr += String.fromCharCode(data[hi]);
+    if (hdr !== 'JwwData') throw new Error('JWW\u30D5\u30A1\u30A4\u30EB\u3067\u306F\u3042\u308A\u307E\u305B\u3093');
+
+    var version = view.getUint32(8, true);
+    var cdSz = (version >= 351) ? 15 : 13;
+
+    // Pre-allocate typed arrays (grow as needed)
+    var LINE_CHUNK = 50000;
+    var lineCoords = new Float64Array(LINE_CHUNK * 4); // x1,y1,x2,y2
+    var lineMeta = new Uint8Array(LINE_CHUNK * 2); // layer, glayer
+    var lineCount = 0;
+
+    var ARC_CHUNK = 20000;
+    var arcData = new Float64Array(ARC_CHUNK * 7); // cx,cy,r,sa,ea,tilt,flat
+    var arcMeta = new Uint8Array(ARC_CHUNK * 3); // layer, glayer, isCircle
+    var arcCount = 0;
+
+    var texts = [];
+
+    function growLines() {
+      var newSize = lineCoords.length + LINE_CHUNK * 4;
+      var nc = new Float64Array(newSize);
+      nc.set(lineCoords);
+      lineCoords = nc;
+      var nm = new Uint8Array(lineMeta.length + LINE_CHUNK * 2);
+      nm.set(lineMeta);
+      lineMeta = nm;
+    }
+
+    function growArcs() {
+      var newSize = arcData.length + ARC_CHUNK * 7;
+      var nd = new Float64Array(newSize);
+      nd.set(arcData);
+      arcData = nd;
+      var nm = new Uint8Array(arcMeta.length + ARC_CHUNK * 3);
+      nm.set(arcMeta);
+      arcMeta = nm;
+    }
+
+    function addLine(x1, y1, x2, y2, layer, glayer) {
+      if (lineCount * 4 >= lineCoords.length) growLines();
+      var i = lineCount * 4;
+      lineCoords[i] = x1; lineCoords[i+1] = y1;
+      lineCoords[i+2] = x2; lineCoords[i+3] = y2;
+      var mi = lineCount * 2;
+      lineMeta[mi] = layer; lineMeta[mi+1] = glayer;
+      lineCount++;
+    }
+
+    function addArc(cx, cy, r, sa, ea, tilt, flat, layer, glayer, isCircle) {
+      if (arcCount * 7 >= arcData.length) growArcs();
+      var i = arcCount * 7;
+      arcData[i] = cx; arcData[i+1] = cy; arcData[i+2] = r;
+      arcData[i+3] = sa; arcData[i+4] = ea;
+      arcData[i+5] = tilt; arcData[i+6] = flat;
+      var mi = arcCount * 3;
+      arcMeta[mi] = layer; arcMeta[mi+1] = glayer; arcMeta[mi+2] = isCircle ? 1 : 0;
+      arcCount++;
+    }
+
+    // ---- Find ASCII byte sequence in binary ----
+    function findStr(str, from) {
+      var nl = str.length;
+      outer: for (var i = from || 0; i <= len - nl; i++) {
+        for (var j = 0; j < nl; j++) {
+          if (data[i + j] !== str.charCodeAt(j)) continue outer;
+        }
+        return i;
+      }
+      return -1;
+    }
+
+    // ---- Find MFC class definition ----
+    function findClassDef(className) {
+      var pos = findStr(className, 6);
+      if (pos < 6) return -1;
+      if (view.getUint16(pos - 6, true) === 0xFFFF &&
+          view.getUint16(pos - 2, true) === className.length)
+        return pos + className.length;
+      return -1;
+    }
+
+    // ---- Parse CData base header (inline for speed) ----
+    var lOff = cdSz === 15 ? 9 : 7;
+    var gOff = cdSz === 15 ? 11 : 9;
+
+    function parseCData(off) {
+      if (off + cdSz > len) return -1;
+      var layer = view.getUint16(off + lOff, true);
+      var glayer = view.getUint16(off + gOff, true);
+      if (layer > 15 || glayer > 15) return -1;
+      return off; // return start offset; caller reads layer/glayer directly
+    }
+
+    function getCDLayer(off) { return view.getUint16(off + lOff, true); }
+    function getCDGlayer(off) { return view.getUint16(off + gOff, true); }
+
+    // ---- Read MFC CString ----
+    function readCStr(pos) {
+      if (pos + 1 >= len) return null;
+      if (pos + 4 <= len && data[pos] === 0xFF && data[pos+1] === 0xFE && data[pos+2] === 0xFF) {
+        var cc, hdr;
+        if (data[pos + 3] < 0xFF) {
+          cc = data[pos + 3]; hdr = pos + 4;
+        } else {
+          if (pos + 6 > len) return null;
+          var w = view.getUint16(pos + 4, true);
+          if (w === 0xFFFF) {
+            if (pos + 10 > len) return null;
+            cc = view.getUint32(pos + 6, true); hdr = pos + 10;
+          } else { cc = w; hdr = pos + 6; }
+        }
+        if (cc > 50000 || hdr + cc * 2 > len) return null;
+        try {
+          var decoder = new TextDecoder('utf-16le');
+          return { text: decoder.decode(data.subarray(hdr, hdr + cc * 2)), end: hdr + cc * 2 };
+        } catch(e) { return null; }
+      }
+      var bc2, hdr2;
+      if (data[pos] < 0xFF) {
+        bc2 = data[pos]; hdr2 = pos + 1;
+      } else {
+        if (pos + 3 > len) return null;
+        var w2 = view.getUint16(pos + 1, true);
+        if (w2 === 0xFFFF) {
+          if (pos + 7 > len) return null;
+          bc2 = view.getUint32(pos + 3, true); hdr2 = pos + 7;
+        } else { bc2 = w2; hdr2 = pos + 3; }
+      }
+      if (bc2 > 50000 || hdr2 + bc2 > len) return null;
+      if (bc2 === 0) return { text: '', end: hdr2 };
+      try {
+        var decoder2 = new TextDecoder('shift_jis');
+        return { text: decoder2.decode(data.subarray(hdr2, hdr2 + bc2)), end: hdr2 + bc2 };
+      } catch(e) { return null; }
+    }
+
+    // ===== Read group scales from header =====
+    var scales = [];
+    try {
+      var nameR = readCStr(12);
+      if (nameR) {
+        var firstScale = nameR.end + 16;
+        for (var gi = 0; gi < 16; gi++) {
+          var sOff = firstScale + gi * 148;
+          if (sOff + 8 <= len) {
+            var sv = view.getFloat64(sOff, true);
+            if (isFinite(sv) && sv >= 0.1 && sv <= 100000) {
+              scales.push(sv);
+            } else {
+              scales.push(1);
+            }
+          } else {
+            scales.push(1);
+          }
+        }
+      }
+    } catch(e) {}
+    while (scales.length < 16) scales.push(100);
+
+    // ---- Find all class definition positions for scan boundaries ----
+    // Entity types (lines, arcs, text) are interleaved in JWW MFC streams.
+    // Non-entity types (CDataTen, CDataSolidFigure, CDataBlock, CDataList)
+    // mark the end of the entity data section.
+    var senDef = findClassDef('CDataSen');
+    var enkDef = findClassDef('CDataEnko');
+    var mojiDef = findClassDef('CDataMoji');
+    var tenDef = findClassDef('CDataTen');
+    var solidDef = findClassDef('CDataSolidFigure');
+    var blockDef = findClassDef('CDataBlock');
+    var listDef = findClassDef('CDataList');
+
+    // Entity scan boundary: stop at the earliest non-entity class definition
+    // (CDataTen, CDataSolidFigure, CDataBlock, CDataList)
+    // All entity types (Sen, Enko, Moji) share this boundary since they're interleaved
+    var scanEnd = len;
+    var boundaries = [tenDef, solidDef, blockDef, listDef];
+    for (var bi = 0; bi < boundaries.length; bi++) {
+      if (boundaries[bi] > 0 && boundaries[bi] < scanEnd) {
+        scanEnd = boundaries[bi] - 20; // back up before FFFF class def header
+      }
+    }
+
+    self.postMessage({type: 'progress', pct: 10, detail: '\u30D8\u30C3\u30C0\u30FC\u89E3\u6790\u5B8C\u4E86'});
+
+    // ===== Sequential MFC stream parser =====
+    // In JWW, entities (CDataSen, CDataEnko, CDataMoji) are interleaved in the MFC stream.
+    // Each class appears once with a full class definition, subsequent instances use 2-byte tags.
+    // Tags are assigned in order of first appearance: CDataSen=tag1, CDataEnko=tag2, CDataMoji=tag3.
+    // After parsing an entity of known size, the next bytes must be a valid tag.
+    // This sequential chaining eliminates false positive tag matches.
+
+    // Step 1: Parse first instances (at class definition positions) and collect tags
+    var senTag = -1, enkTag = -1, mojiTag = -1;
+    var streamPositions = []; // [{pos, type}] sorted by position
+
+    // Parse first CDataSen
+    if (senDef > 0) {
+      var cd0 = parseCData(senDef);
+      if (cd0 >= 0) {
+        var o = cd0 + cdSz;
+        if (o + 32 <= len) {
+          var sx1 = view.getFloat64(o, true), sy1 = view.getFloat64(o+8, true);
+          var sx2 = view.getFloat64(o+16, true), sy2 = view.getFloat64(o+24, true);
+          if (isFinite(sx1) && isFinite(sy1) && isFinite(sx2) && isFinite(sy2) &&
+              Math.abs(sx1)<1e7 && Math.abs(sy1)<1e7 && Math.abs(sx2)<1e7 && Math.abs(sy2)<1e7) {
+            var sll = Math.hypot(sx2-sx1, sy2-sy1);
+            if (sll > 0.001 && sll < 1e7)
+              addLine(sx1, sy1, sx2, sy2, getCDLayer(cd0), getCDGlayer(cd0));
+          }
+          // Get tag bytes for subsequent CDataSen
+          var senTagPos = o + 32;
+          if (senTagPos + 1 < len && (data[senTagPos+1] & 0x80)) {
+            senTag = data[senTagPos] | (data[senTagPos+1] << 8);
+          }
+          streamPositions.push({pos: senTagPos, defEnd: senDef});
+        }
+      }
+    }
+
+    // Parse first CDataEnko
+    if (enkDef > 0) {
+      var cd0a = parseCData(enkDef);
+      if (cd0a >= 0) {
+        var ao = cd0a + cdSz;
+        if (ao + 60 <= len) {
+          var acx = view.getFloat64(ao, true), acy = view.getFloat64(ao+8, true);
+          var ar = view.getFloat64(ao+16, true), asa = view.getFloat64(ao+24, true);
+          var aarcA = view.getFloat64(ao+32, true), atilt = view.getFloat64(ao+40, true);
+          var aflat = view.getFloat64(ao+48, true), afull = view.getUint32(ao+56, true);
+          if (isFinite(acx) && isFinite(acy) && isFinite(ar) && ar > 0 && ar <= 1e7 &&
+              Math.abs(acx) <= 1e7 && Math.abs(acy) <= 1e7) {
+            var isC = afull === 1 || Math.abs(Math.abs(aarcA) - Math.PI * 2) < 0.01;
+            addArc(acx, acy, ar, asa, asa+aarcA, atilt, aflat,
+                   getCDLayer(cd0a), getCDGlayer(cd0a), isC);
+          }
+          var enkTagPos = ao + 60;
+          if (enkTagPos + 1 < len && (data[enkTagPos+1] & 0x80)) {
+            enkTag = data[enkTagPos] | (data[enkTagPos+1] << 8);
+          }
+          streamPositions.push({pos: enkTagPos, defEnd: enkDef});
+        }
+      }
+    }
+
+    // Parse first CDataMoji
+    var mojiFirstEnd = -1;
+    if (mojiDef > 0) {
+      var cdm0 = parseCData(mojiDef);
+      if (cdm0 >= 0) {
+        var mo = cdm0 + cdSz;
+        if (mo + 68 <= len) {
+          var mx1 = view.getFloat64(mo, true), my1 = view.getFloat64(mo+8, true);
+          var msX = view.getFloat64(mo+36, true), msY = view.getFloat64(mo+44, true);
+          var mkak = view.getFloat64(mo+60, true);
+          if (isFinite(mx1) && isFinite(my1) && Math.abs(mx1)<=1e7 && Math.abs(my1)<=1e7 &&
+              isFinite(msX) && msX > 0 && msX <= 10000 && isFinite(msY) && msY > 0 && msY <= 10000) {
+            var fontR0 = readCStr(mo + 68);
+            if (fontR0) {
+              var textR0 = readCStr(fontR0.end);
+              if (textR0 && textR0.text.length > 0) {
+                texts.push({x:mx1, y:my1, sz:Math.max(msX,msY), text:textR0.text, angle:mkak,
+                            layer:getCDLayer(cdm0), glayer:getCDGlayer(cdm0)});
+                mojiFirstEnd = textR0.end;
+                if (mojiFirstEnd + 1 < len && (data[mojiFirstEnd+1] & 0x80)) {
+                  mojiTag = data[mojiFirstEnd] | (data[mojiFirstEnd+1] << 8);
+                }
+                streamPositions.push({pos: mojiFirstEnd, defEnd: mojiDef});
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Step 2: Sequential stream parsing from after the last class definition's first instance
+    // Sort stream positions to find the latest one
+    streamPositions.sort(function(a, b) { return a.pos - b.pos; });
+    var seqStart = streamPositions.length > 0 ? streamPositions[streamPositions.length - 1].pos : -1;
+
+    if (seqStart > 0 && seqStart < scanEnd) {
+      var pos = seqStart;
+      var lastPct = 10;
+      var missCount = 0; // consecutive misses for recovery
+
+      while (pos < scanEnd - 2) {
+        var t = data[pos] | (data[pos+1] << 8);
+
+        if (t === senTag && senTag > 0) {
+          // CDataSen (line): tag(2) + CData(cdSz) + 4 doubles(32)
+          var scd = parseCData(pos + 2);
+          if (scd >= 0) {
+            var so = scd + cdSz;
+            if (so + 32 > len) break;
+            var lx1 = view.getFloat64(so, true), ly1 = view.getFloat64(so+8, true);
+            var lx2 = view.getFloat64(so+16, true), ly2 = view.getFloat64(so+24, true);
+            if (isFinite(lx1) && isFinite(ly1) && isFinite(lx2) && isFinite(ly2) &&
+                Math.abs(lx1)<1e7 && Math.abs(ly1)<1e7 && Math.abs(lx2)<1e7 && Math.abs(ly2)<1e7) {
+              var ll = Math.hypot(lx2-lx1, ly2-ly1);
+              if (ll > 0.001 && ll < 1e7)
+                addLine(lx1, ly1, lx2, ly2, getCDLayer(scd), getCDGlayer(scd));
+            }
+            pos = so + 32;
+            missCount = 0;
+            continue;
+          }
+        }
+
+        if (t === enkTag && enkTag > 0) {
+          // CDataEnko (arc): tag(2) + CData(cdSz) + 60 bytes
+          var acd = parseCData(pos + 2);
+          if (acd >= 0) {
+            var ao2 = acd + cdSz;
+            if (ao2 + 60 > len) break;
+            var cx2 = view.getFloat64(ao2, true), cy2 = view.getFloat64(ao2+8, true);
+            var r2 = view.getFloat64(ao2+16, true), sa2 = view.getFloat64(ao2+24, true);
+            var arcA2 = view.getFloat64(ao2+32, true), tilt2 = view.getFloat64(ao2+40, true);
+            var flat2 = view.getFloat64(ao2+48, true), full2 = view.getUint32(ao2+56, true);
+            if (isFinite(cx2) && isFinite(cy2) && isFinite(r2) && r2 > 0 && r2 <= 1e7 &&
+                Math.abs(cx2) <= 1e7 && Math.abs(cy2) <= 1e7) {
+              var isC2 = full2 === 1 || Math.abs(Math.abs(arcA2) - Math.PI * 2) < 0.01;
+              addArc(cx2, cy2, r2, sa2, sa2+arcA2, tilt2, flat2,
+                     getCDLayer(acd), getCDGlayer(acd), isC2);
+            }
+            pos = ao2 + 60;
+            missCount = 0;
+            continue;
+          }
+        }
+
+        if (t === mojiTag && mojiTag > 0) {
+          // CDataMoji (text): tag(2) + CData(cdSz) + 68 bytes + fontStr + textStr
+          var mcd = parseCData(pos + 2);
+          if (mcd >= 0) {
+            var mo2 = mcd + cdSz;
+            if (mo2 + 68 > len) break;
+            var mx = view.getFloat64(mo2, true), my = view.getFloat64(mo2+8, true);
+            var msx = view.getFloat64(mo2+36, true), msy = view.getFloat64(mo2+44, true);
+            var mk = view.getFloat64(mo2+60, true);
+            if (isFinite(mx) && isFinite(my) && Math.abs(mx)<=1e7 && Math.abs(my)<=1e7 &&
+                isFinite(msx) && msx > 0 && msx <= 10000 && isFinite(msy) && msy > 0 && msy <= 10000) {
+              var fr = readCStr(mo2 + 68);
+              if (fr) {
+                var tr = readCStr(fr.end);
+                if (tr && tr.text.length > 0) {
+                  texts.push({x:mx, y:my, sz:Math.max(msx,msy), text:tr.text, angle:mk,
+                              layer:getCDLayer(mcd), glayer:getCDGlayer(mcd)});
+                  pos = tr.end;
+                  missCount = 0;
+                  continue;
+                }
+              }
+            }
+          }
+        }
+
+        // Unknown tag or failed parse - skip 1 byte and try again
+        pos++;
+        missCount++;
+
+        // If we've missed too many consecutive bytes, we might be in a gap
+        // Skip ahead more aggressively after many misses
+        if (missCount > 200) {
+          pos += 10;
+          missCount = 0;
+        }
+
+        // Progress reporting
+        var pct = 10 + Math.round((pos - seqStart) / (scanEnd - seqStart) * 75);
+        if (pct > lastPct + 4) {
+          lastPct = pct;
+          self.postMessage({type: 'progress', pct: pct,
+            detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length});
+        }
+      }
+    }
+
+    // Also handle entities between class defs (before the sequential section)
+    // These are entities that appear between class definitions
+    for (var spi = 0; spi < streamPositions.length - 1; spi++) {
+      var gapStart = streamPositions[spi].pos;
+      var gapEnd = streamPositions[spi + 1].defEnd - 20; // before next class def header
+      if (gapEnd <= gapStart) continue;
+
+      var gpos = gapStart;
+      while (gpos < gapEnd - 2) {
+        var gt = data[gpos] | (data[gpos+1] << 8);
+
+        if (gt === senTag && senTag > 0) {
+          var gscd = parseCData(gpos + 2);
+          if (gscd >= 0) {
+            var gso = gscd + cdSz;
+            if (gso + 32 <= len) {
+              var glx1 = view.getFloat64(gso, true), gly1 = view.getFloat64(gso+8, true);
+              var glx2 = view.getFloat64(gso+16, true), gly2 = view.getFloat64(gso+24, true);
+              if (isFinite(glx1) && isFinite(gly1) && isFinite(glx2) && isFinite(gly2) &&
+                  Math.abs(glx1)<1e7 && Math.abs(gly1)<1e7 && Math.abs(glx2)<1e7 && Math.abs(gly2)<1e7) {
+                var gll = Math.hypot(glx2-glx1, gly2-gly1);
+                if (gll > 0.001 && gll < 1e7)
+                  addLine(glx1, gly1, glx2, gly2, getCDLayer(gscd), getCDGlayer(gscd));
+              }
+              gpos = gso + 32;
+              continue;
+            }
+          }
+        }
+
+        if (gt === enkTag && enkTag > 0) {
+          var gacd = parseCData(gpos + 2);
+          if (gacd >= 0) {
+            var gao = gacd + cdSz;
+            if (gao + 60 <= len) {
+              var gcx = view.getFloat64(gao, true), gcy = view.getFloat64(gao+8, true);
+              var gr = view.getFloat64(gao+16, true), gsa = view.getFloat64(gao+24, true);
+              var garc = view.getFloat64(gao+32, true), gtilt = view.getFloat64(gao+40, true);
+              var gflat = view.getFloat64(gao+48, true), gfull = view.getUint32(gao+56, true);
+              if (isFinite(gcx) && isFinite(gcy) && isFinite(gr) && gr > 0 && gr <= 1e7 &&
+                  Math.abs(gcx) <= 1e7 && Math.abs(gcy) <= 1e7) {
+                var giC = gfull === 1 || Math.abs(Math.abs(garc) - Math.PI * 2) < 0.01;
+                addArc(gcx, gcy, gr, gsa, gsa+garc, gtilt, gflat,
+                       getCDLayer(gacd), getCDGlayer(gacd), giC);
+              }
+              gpos = gao + 60;
+              continue;
+            }
+          }
+        }
+
+        gpos++;
+      }
+    }
+
+    self.postMessage({type: 'progress', pct: 85,
+      detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length + ' \u5B8C\u4E86'});
+
+    // ===== Build snap points (limited) =====
+    var SNAP_LIMIT = 15000;
+    var snapCount = 0;
+    var snapCoords = null;
+    if (lineCount <= SNAP_LIMIT) {
+      var snapSet = {};
+      var snapBuf = new Float64Array(Math.min(lineCount * 4, SNAP_LIMIT * 2) * 2);
+      for (var sli = 0; sli < lineCount && snapCount < SNAP_LIMIT; sli++) {
+        var si4 = sli * 4;
+        for (var sp = 0; sp < 2 && snapCount < SNAP_LIMIT; sp++) {
+          var skx = lineCoords[si4 + sp*2], sky = lineCoords[si4 + sp*2 + 1];
+          var sk = (Math.round(skx * 10)|0) + ',' + (Math.round(sky * 10)|0);
+          if (!snapSet[sk]) {
+            snapSet[sk] = 1;
+            snapBuf[snapCount * 2] = skx;
+            snapBuf[snapCount * 2 + 1] = sky;
+            snapCount++;
+          }
+        }
+      }
+      snapCoords = snapBuf.subarray(0, snapCount * 2);
+    }
+    self.postMessage({type: 'progress', pct: 95, detail: 'snap: ' + snapCount + '\u70B9'});
+
+    // Build layer-sorted indices for O(1) per-layer iteration
+    // lineByLayer[layer*16+glayer] = [start, count] into lineSorted
+    var lineSorted = new Uint32Array(lineCount);
+    var lineLayerOff = new Uint32Array(257); // bucket counts, then prefix sums (16*16=256 buckets)
+    for (var lsi = 0; lsi < lineCount; lsi++) {
+      var lsk = lineMeta[lsi*2] * 16 + lineMeta[lsi*2+1];
+      lineLayerOff[lsk]++;
+    }
+    // prefix sum
+    var lsSum = 0;
+    for (var lsk2 = 0; lsk2 < 256; lsk2++) {
+      var lsCnt = lineLayerOff[lsk2];
+      lineLayerOff[lsk2] = lsSum;
+      lsSum += lsCnt;
+    }
+    lineLayerOff[256] = lsSum;
+    var lsPos = new Uint32Array(256);
+    lsPos.set(lineLayerOff.subarray(0, 256));
+    for (var lsi2 = 0; lsi2 < lineCount; lsi2++) {
+      var lsk3 = lineMeta[lsi2*2] * 16 + lineMeta[lsi2*2+1];
+      lineSorted[lsPos[lsk3]++] = lsi2;
+    }
+
+    // Same for arcs
+    var arcSorted = new Uint32Array(arcCount);
+    var arcLayerOff = new Uint32Array(257);
+    for (var asi2 = 0; asi2 < arcCount; asi2++) {
+      var ask = arcMeta[asi2*3] * 16 + arcMeta[asi2*3+1];
+      arcLayerOff[ask]++;
+    }
+    var asSum = 0;
+    for (var ask2 = 0; ask2 < 256; ask2++) {
+      var asCnt = arcLayerOff[ask2];
+      arcLayerOff[ask2] = asSum;
+      asSum += asCnt;
+    }
+    arcLayerOff[256] = asSum;
+    var asPos = new Uint32Array(256);
+    asPos.set(arcLayerOff.subarray(0, 256));
+    for (var asi3 = 0; asi3 < arcCount; asi3++) {
+      var ask3 = arcMeta[asi3*3] * 16 + arcMeta[asi3*3+1];
+      arcSorted[asPos[ask3]++] = asi3;
+    }
+
+    // Trim typed arrays
+    var trimLC = new Float64Array(lineCount * 4);
+    trimLC.set(lineCoords.subarray(0, lineCount * 4));
+    var trimLM = new Uint8Array(lineCount * 2);
+    trimLM.set(lineMeta.subarray(0, lineCount * 2));
+    var trimAD = new Float64Array(arcCount * 7);
+    trimAD.set(arcData.subarray(0, arcCount * 7));
+    var trimAM = new Uint8Array(arcCount * 3);
+    trimAM.set(arcMeta.subarray(0, arcCount * 3));
+
+    lineCoords = null; lineMeta = null; arcData = null; arcMeta = null;
+
+    return {
+      lineCoords: trimLC, lineMeta: trimLM, lineCount: lineCount,
+      lineSorted: lineSorted, lineLayerOff: lineLayerOff,
+      arcData: trimAD, arcMeta: trimAM, arcCount: arcCount,
+      arcSorted: arcSorted, arcLayerOff: arcLayerOff,
+      texts: texts,
+      snapCoords: snapCoords ? new Float64Array(snapCoords) : new Float64Array(0),
+      snapCount: snapCount,
+      scales: scales, version: version
+    };
+  }
+}.toString();
+
+// Extract function body and create blob URL
+var workerBody = WORKER_CODE.slice(WORKER_CODE.indexOf('{') + 1, WORKER_CODE.lastIndexOf('}'));
+var workerBlob = new Blob([workerBody], {type: 'application/javascript'});
+var workerUrl = URL.createObjectURL(workerBlob);
+
 // ===== JWW Layer Colors (dark background optimized) =====
 var LAYER_COLORS = [
   '#e6edf3', '#58a6ff', '#3fb950', '#bc8cff',
@@ -175,270 +743,35 @@ function penWidth(pen, sc) {
   return Math.max(0.5, sc * 0.04);
 }
 
-// ===== MFC-aware JWW Binary Parser (v14) =====
-function parseJWW(buffer) {
-  var data = new Uint8Array(buffer);
-  var view = new DataView(buffer);
-  var len = data.length;
+// ===== Viewer State (TypedArray based) =====
+var LINE_COORDS = null; // Float64Array [x1,y1,x2,y2, ...]
+var LINE_META = null;   // Uint8Array [layer,glayer, ...]
+var LINE_COUNT = 0;
+var LINE_SORTED = null; // Uint32Array - indices sorted by layer*16+glayer
+var LINE_LAYER_OFF = null; // Uint32Array[257] - offset table
+var ARC_DATA = null;    // Float64Array [cx,cy,r,sa,ea,tilt,flat, ...]
+var ARC_META = null;    // Uint8Array [layer,glayer,isCircle, ...]
+var ARC_COUNT = 0;
+var ARC_SORTED = null;
+var ARC_LAYER_OFF = null;
+var TEXTS = [];
+var SNAP_COORDS = null; // Float64Array [x,y, ...]
+var SNAP_COUNT = 0;
 
-  if (len < 12 || String.fromCharCode.apply(null, data.slice(0, 7)) !== 'JwwData')
-    throw new Error('JWW\u30D5\u30A1\u30A4\u30EB\u3067\u306F\u3042\u308A\u307E\u305B\u3093');
-
-  var version = view.getUint32(8, true);
-  var cdSz = (version >= 351) ? 15 : 13;
-
-  var lines = [], arcs = [], texts = [];
-  var sjis = new TextDecoder('shift_jis');
-  var utf16 = new TextDecoder('utf-16le');
-
-  // ---- Find ASCII byte sequence in binary ----
-  function findStr(str, from) {
-    var nl = str.length;
-    outer: for (var i = from || 0; i <= len - nl; i++) {
-      for (var j = 0; j < nl; j++) {
-        if (data[i + j] !== str.charCodeAt(j)) continue outer;
-      }
-      return i;
-    }
-    return -1;
-  }
-
-  // ---- Find MFC class definition ----
-  function findClassDef(className) {
-    var pos = findStr(className, 6);
-    if (pos < 6) return -1;
-    if (view.getUint16(pos - 6, true) === 0xFFFF &&
-        view.getUint16(pos - 2, true) === className.length)
-      return pos + className.length;
-    return -1;
-  }
-
-  // ---- Parse CData base header ----
-  function parseCData(off) {
-    if (off + cdSz > len) return null;
-    var lOff = cdSz === 15 ? 9 : 7;
-    var gOff = cdSz === 15 ? 11 : 9;
-    var layer = view.getUint16(off + lOff, true);
-    var glayer = view.getUint16(off + gOff, true);
-    if (layer > 15 || glayer > 15) return null;
-    return {
-      penStyle: data[off + 4],
-      penColor: view.getUint16(off + 5, true),
-      layer: layer,
-      glayer: glayer,
-      _end: off + cdSz
-    };
-  }
-
-  // ---- Read MFC CString (UTF-16LE or Shift-JIS) ----
-  function readCStr(pos) {
-    if (pos + 1 >= len) return null;
-    if (pos + 4 <= len && data[pos] === 0xFF && data[pos+1] === 0xFE && data[pos+2] === 0xFF) {
-      var cc, hdr;
-      if (data[pos + 3] < 0xFF) {
-        cc = data[pos + 3]; hdr = pos + 4;
-      } else {
-        if (pos + 6 > len) return null;
-        var w = view.getUint16(pos + 4, true);
-        if (w === 0xFFFF) {
-          if (pos + 10 > len) return null;
-          cc = view.getUint32(pos + 6, true); hdr = pos + 10;
-        } else { cc = w; hdr = pos + 6; }
-      }
-      if (cc > 50000 || hdr + cc * 2 > len) return null;
-      try { return { text: utf16.decode(data.slice(hdr, hdr + cc * 2)), end: hdr + cc * 2 }; }
-      catch(e) { return null; }
-    }
-    var bc2, hdr2;
-    if (data[pos] < 0xFF) {
-      bc2 = data[pos]; hdr2 = pos + 1;
-    } else {
-      if (pos + 3 > len) return null;
-      var w2 = view.getUint16(pos + 1, true);
-      if (w2 === 0xFFFF) {
-        if (pos + 7 > len) return null;
-        bc2 = view.getUint32(pos + 3, true); hdr2 = pos + 7;
-      } else { bc2 = w2; hdr2 = pos + 3; }
-    }
-    if (bc2 > 50000 || hdr2 + bc2 > len) return null;
-    if (bc2 === 0) return { text: '', end: hdr2 };
-    try { return { text: sjis.decode(data.slice(hdr2, hdr2 + bc2)), end: hdr2 + bc2 }; }
-    catch(e) { return null; }
-  }
-
-  // ===== Read group scales from header =====
-  // Groups 0-F each have a CString name followed by fields, with scale at offset +16 after name end
-  // Stride between groups: 148 bytes
-  var scales = [];
-  try {
-    var nameR = readCStr(12);
-    if (nameR) {
-      var firstScale = nameR.end + 16;
-      for (var gi = 0; gi < 16; gi++) {
-        var sOff = firstScale + gi * 148;
-        if (sOff + 8 <= len) {
-          var sv = view.getFloat64(sOff, true);
-          if (isFinite(sv) && sv >= 0.1 && sv <= 100000) {
-            scales.push(sv);
-          } else {
-            scales.push(1);
-          }
-        } else {
-          scales.push(1);
-        }
-      }
-    }
-  } catch(e) {
-    // fallback: no scale info
-  }
-  if (scales.length < 16) {
-    while (scales.length < 16) scales.push(100);
-  }
-
-  // ---- Scan boundary ----
-  var listDef = findClassDef('CDataList');
-  var scanEnd = listDef > 0 ? listDef : len;
-
-  // ===== Parse CDataSen (lines) =====
-  var senDef = findClassDef('CDataSen');
-  if (senDef > 0) {
-    var cd0 = parseCData(senDef);
-    if (cd0 && cd0._end + 32 <= len) {
-      var o = cd0._end;
-      var sx1 = view.getFloat64(o, true), sy1 = view.getFloat64(o+8, true);
-      var sx2 = view.getFloat64(o+16, true), sy2 = view.getFloat64(o+24, true);
-      if ([sx1,sy1,sx2,sy2].every(function(v){return isFinite(v) && Math.abs(v)<1e7;})) {
-        var sll = Math.hypot(sx2-sx1, sy2-sy1);
-        if (sll > 0.001 && sll < 1e7)
-          lines.push({x1:sx1, y1:sy1, x2:sx2, y2:sy2, pen:cd0.penColor, layer:cd0.layer, glayer:cd0.glayer});
-      }
-      var st = o + 32;
-      if (st + 1 < len && (data[st+1] & 0x80)) {
-        var stag0 = data[st], stag1 = data[st+1];
-        for (var si = st; si < scanEnd - (2 + cdSz + 32); si++) {
-          if (data[si] === stag0 && data[si+1] === stag1) {
-            var scd = parseCData(si + 2);
-            if (!scd) continue;
-            var so = scd._end;
-            if (so + 32 > len) continue;
-            var lx1 = view.getFloat64(so, true), ly1 = view.getFloat64(so+8, true);
-            var lx2 = view.getFloat64(so+16, true), ly2 = view.getFloat64(so+24, true);
-            if ([lx1,ly1,lx2,ly2].every(function(v){return isFinite(v) && Math.abs(v)<1e7;})) {
-              var ll = Math.hypot(lx2-lx1, ly2-ly1);
-              if (ll > 0.001 && ll < 1e7) {
-                lines.push({x1:lx1, y1:ly1, x2:lx2, y2:ly2, pen:scd.penColor, layer:scd.layer, glayer:scd.glayer});
-                si = so + 31;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ===== Parse CDataEnko (arcs/circles) =====
-  var enkDef = findClassDef('CDataEnko');
-  if (enkDef > 0) {
-    function parseArc(cdOff) {
-      var cd = parseCData(cdOff);
-      if (!cd || cd._end + 60 > len) return null;
-      var ao = cd._end;
-      var cx = view.getFloat64(ao, true), cy = view.getFloat64(ao+8, true);
-      var r = view.getFloat64(ao+16, true), sa = view.getFloat64(ao+24, true);
-      var arcA = view.getFloat64(ao+32, true), tilt = view.getFloat64(ao+40, true);
-      var flat = view.getFloat64(ao+48, true), full = view.getUint32(ao+56, true);
-      if (!isFinite(cx) || !isFinite(cy) || !isFinite(r) || r <= 0 || r > 1e7 ||
-          Math.abs(cx) > 1e7 || Math.abs(cy) > 1e7) return null;
-      var isCircle = full === 1 || Math.abs(Math.abs(arcA) - Math.PI * 2) < 0.01;
-      arcs.push({
-        cx:cx, cy:cy, r:r, sa:sa, ea:sa+arcA, tilt:tilt, flat:flat,
-        cat: isCircle ? 'circle' : 'arc',
-        pen: cd.penColor, layer: cd.layer, glayer: cd.glayer
-      });
-      return ao + 60;
-    }
-    var aEndOff = parseArc(enkDef);
-    if (aEndOff && aEndOff + 1 < len && (data[aEndOff+1] & 0x80)) {
-      var atag0 = data[aEndOff], atag1 = data[aEndOff+1];
-      for (var ai = aEndOff; ai < scanEnd - (2 + cdSz + 60); ai++) {
-        if (data[ai] === atag0 && data[ai+1] === atag1) {
-          var ar2 = parseArc(ai + 2);
-          if (ar2) ai = ar2 - 1;
-        }
-      }
-    }
-  }
-
-  // ===== Parse CDataMoji (text) =====
-  var mojiDef = findClassDef('CDataMoji');
-  if (mojiDef > 0) {
-    function parseMoji(cdOff) {
-      var cd = parseCData(cdOff);
-      if (!cd || cd._end + 68 > len) return null;
-      var mo = cd._end;
-      var mx1 = view.getFloat64(mo, true), my1 = view.getFloat64(mo+8, true);
-      var msX = view.getFloat64(mo+36, true), msY = view.getFloat64(mo+44, true);
-      var mkak = view.getFloat64(mo+60, true);
-      if (!isFinite(mx1) || !isFinite(my1) || Math.abs(mx1) > 1e7 || Math.abs(my1) > 1e7) return null;
-      if (!isFinite(msX) || msX <= 0 || msX > 10000) return null;
-      if (!isFinite(msY) || msY <= 0 || msY > 10000) return null;
-      var fontR = readCStr(mo + 68);
-      if (!fontR) return null;
-      var textR = readCStr(fontR.end);
-      if (!textR || textR.text.length === 0) return null;
-      texts.push({
-        x: mx1, y: my1,
-        sz: Math.max(msX, msY),
-        text: textR.text,
-        angle: mkak,
-        layer: cd.layer,
-        glayer: cd.glayer
-      });
-      return textR.end;
-    }
-    var mEndOff = parseMoji(mojiDef);
-    if (mEndOff && mEndOff + 1 < len && (data[mEndOff+1] & 0x80)) {
-      var mtag0 = data[mEndOff], mtag1 = data[mEndOff+1];
-      for (var mi = mEndOff; mi < scanEnd - 20; mi++) {
-        if (data[mi] === mtag0 && data[mi+1] === mtag1) {
-          var mr = parseMoji(mi + 2);
-          if (mr) mi = mr - 1;
-        }
-      }
-    }
-  }
-
-  // ===== Build snap points =====
-  var snap = [];
-  var snapSet = new Set();
-  for (var li = 0; li < lines.length; li++) {
-    var l = lines[li];
-    var pts2 = [[l.x1, l.y1], [l.x2, l.y2]];
-    for (var pi = 0; pi < 2; pi++) {
-      var k = Math.round(pts2[pi][0] * 10) + ',' + Math.round(pts2[pi][1] * 10);
-      if (!snapSet.has(k)) { snapSet.add(k); snap.push(pts2[pi]); }
-    }
-  }
-
-  return { lines: lines, arcs: arcs, texts: texts, snap: snap, scales: scales, version: version };
-}
-
-// ===== Viewer State =====
-var LINES = [], ARCS = [], TEXTS = [], SNAP = [];
 var vis = { line: true, arc: true, text: true };
 var sf = 100;
 var scaleMode = 'auto';
-var groupScales = []; // scales[0..15] from file
+var groupScales = [];
 var cv = document.getElementById('cv');
 var ctx = cv.getContext('2d');
 var sni = document.getElementById('sni');
 var mode = 'view', tx = 0, ty = 0, sc = 1, drag = false, dx0 = 0, dy0 = 0, pts = [];
 
 // ===== Layer Visibility =====
-var glayerVis = []; // [0..15] = true/false
-var layerVis = [];  // [0..15][0..15] = true/false
-var curGroup = 0;   // currently selected group for layer display
-var layerCounts = []; // [g][l] = count of entities
+var glayerVis = [];
+var layerVis = [];
+var curGroup = 0;
+var layerCounts = [];
 
 function initLayers() {
   glayerVis = [];
@@ -457,17 +790,28 @@ function initLayers() {
 initLayers();
 
 function countLayers() {
-  for (var g = 0; g < 16; g++)
-    for (var l = 0; l < 16; l++)
+  var g, l, i, mi;
+  for (g = 0; g < 16; g++)
+    for (l = 0; l < 16; l++)
       layerCounts[g][l] = 0;
 
-  var allItems = LINES.concat(ARCS).concat(TEXTS);
-  for (var i = 0; i < allItems.length; i++) {
-    var it = allItems[i];
-    var g = it.glayer || 0;
-    var l = it.layer || 0;
-    if (g >= 0 && g < 16 && l >= 0 && l < 16)
-      layerCounts[g][l]++;
+  // Lines (TypedArray)
+  for (i = 0; i < LINE_COUNT; i++) {
+    mi = i * 2;
+    l = LINE_META[mi]; g = LINE_META[mi+1];
+    if (g < 16 && l < 16) layerCounts[g][l]++;
+  }
+  // Arcs (TypedArray)
+  for (i = 0; i < ARC_COUNT; i++) {
+    mi = i * 3;
+    l = ARC_META[mi]; g = ARC_META[mi+1];
+    if (g < 16 && l < 16) layerCounts[g][l]++;
+  }
+  // Texts (object array)
+  for (i = 0; i < TEXTS.length; i++) {
+    g = TEXTS[i].glayer || 0;
+    l = TEXTS[i].layer || 0;
+    if (g < 16 && l < 16) layerCounts[g][l]++;
   }
 }
 
@@ -475,12 +819,6 @@ function groupTotal(g) {
   var t = 0;
   for (var l = 0; l < 16; l++) t += layerCounts[g][l];
   return t;
-}
-
-function isEntityVisible(item) {
-  var g = item.glayer || 0;
-  var l = item.layer || 0;
-  return glayerVis[g] && layerVis[g][l];
 }
 
 // ===== Layer Panel UI =====
@@ -522,10 +860,8 @@ function buildLayerUI() {
     btn.onclick = (function(gg) {
       return function(e) {
         if (e.shiftKey) {
-          // Shift+click: toggle group visibility
           glayerVis[gg] = !glayerVis[gg];
         } else {
-          // Normal click: select this group for layer display
           curGroup = gg;
         }
         buildLayerUI();
@@ -535,7 +871,6 @@ function buildLayerUI() {
     gDiv.appendChild(btn);
   }
 
-  // Add "All ON" / "All OFF" buttons for groups
   var allOnG = document.createElement('div');
   allOnG.className = 'gbtn';
   allOnG.textContent = 'All';
@@ -547,7 +882,6 @@ function buildLayerUI() {
   };
   gDiv.appendChild(allOnG);
 
-  // Build layer buttons for current group
   var lDiv = document.getElementById('llayers');
   lDiv.innerHTML = '<span class="llabel">L(G' + HEX[curGroup] + '):</span>';
   for (var l = 0; l < 16; l++) {
@@ -573,7 +907,6 @@ function buildLayerUI() {
     lDiv.appendChild(lbtn);
   }
 
-  // All ON/OFF for layers
   var allOnL = document.createElement('div');
   allOnL.className = 'lbtn2';
   allOnL.textContent = 'All';
@@ -595,7 +928,6 @@ function buildLayerUI() {
   };
   lDiv.appendChild(noneL);
 
-  // Info line
   var info = document.getElementById('linfo');
   var gsc = groupScales[curGroup] || 100;
   info.textContent = 'G' + HEX[curGroup] + ': ' + groupTotal(curGroup) + ' entities, scale 1/' + gsc;
@@ -605,18 +937,32 @@ function tog(k, el) { vis[k] = !vis[k]; el.classList.toggle('on', vis[k]); draw(
 function resize() { cv.width = cv.parentElement.clientWidth; cv.height = cv.parentElement.clientHeight; draw(); }
 
 function fitView() {
-  if (LINES.length === 0 && ARCS.length === 0) return;
+  if (LINE_COUNT === 0 && ARC_COUNT === 0) return;
   var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  LINES.forEach(function(l) {
-    if (!isEntityVisible(l)) return;
-    x0 = Math.min(x0, l.x1, l.x2); x1 = Math.max(x1, l.x1, l.x2);
-    y0 = Math.min(y0, l.y1, l.y2); y1 = Math.max(y1, l.y1, l.y2);
-  });
-  ARCS.forEach(function(a) {
-    if (!isEntityVisible(a)) return;
-    x0 = Math.min(x0, a.cx - a.r); x1 = Math.max(x1, a.cx + a.r);
-    y0 = Math.min(y0, a.cy - a.r); y1 = Math.max(y1, a.cy + a.r);
-  });
+  // Lines
+  for (var i = 0; i < LINE_COUNT; i++) {
+    var mi = i * 2;
+    var layer = LINE_META[mi], glayer = LINE_META[mi+1];
+    if (!glayerVis[glayer] || !layerVis[glayer][layer]) continue;
+    var ci = i * 4;
+    var lx1 = LINE_COORDS[ci], ly1 = LINE_COORDS[ci+1];
+    var lx2 = LINE_COORDS[ci+2], ly2 = LINE_COORDS[ci+3];
+    if (lx1 < x0) x0 = lx1; if (lx2 < x0) x0 = lx2;
+    if (lx1 > x1) x1 = lx1; if (lx2 > x1) x1 = lx2;
+    if (ly1 < y0) y0 = ly1; if (ly2 < y0) y0 = ly2;
+    if (ly1 > y1) y1 = ly1; if (ly2 > y1) y1 = ly2;
+  }
+  // Arcs
+  for (var ai = 0; ai < ARC_COUNT; ai++) {
+    var ami = ai * 3;
+    if (!glayerVis[ARC_META[ami+1]] || !layerVis[ARC_META[ami+1]][ARC_META[ami]]) continue;
+    var adi = ai * 7;
+    var acx = ARC_DATA[adi], acy = ARC_DATA[adi+1], ar = ARC_DATA[adi+2];
+    if (acx - ar < x0) x0 = acx - ar;
+    if (acx + ar > x1) x1 = acx + ar;
+    if (acy - ar < y0) y0 = acy - ar;
+    if (acy + ar > y1) y1 = acy + ar;
+  }
   if (!isFinite(x0)) return;
   var dw = x1 - x0, dh = y1 - y0;
   sc = Math.min(cv.width / dw, cv.height / dh) * 0.88;
@@ -629,12 +975,13 @@ var S = function(wx, wy) { return { x: wx * sc + tx, y: -wy * sc + ty }; };
 var W = function(sx, sy) { return { x: (sx - tx) / sc, y: -(sy - ty) / sc }; };
 
 function snapPt(sx, sy) {
-  if (!document.getElementById('snp').checked) return null;
+  if (!document.getElementById('snp').checked || !SNAP_COORDS || SNAP_COUNT === 0) return null;
   var b = null, bd = 15;
-  for (var i = 0; i < SNAP.length; i++) {
-    var s = S(SNAP[i][0], SNAP[i][1]);
-    var d = Math.hypot(s.x - sx, s.y - sy);
-    if (d < bd) { bd = d; b = { wx: SNAP[i][0], wy: SNAP[i][1], sx: s.x, sy: s.y }; }
+  for (var i = 0; i < SNAP_COUNT; i++) {
+    var wx = SNAP_COORDS[i*2], wy = SNAP_COORDS[i*2+1];
+    var px = wx * sc + tx, py = -wy * sc + ty;
+    var d = Math.hypot(px - sx, py - sy);
+    if (d < bd) { bd = d; b = { wx: wx, wy: wy, sx: px, sy: py }; }
   }
   return b;
 }
@@ -643,7 +990,6 @@ function snapPt(sx, sy) {
 function onScaleChange(val) {
   if (val === 'auto') {
     scaleMode = 'auto';
-    // Use the most common scale from file
     sf = getMainScale();
   } else {
     scaleMode = 'manual';
@@ -654,7 +1000,6 @@ function onScaleChange(val) {
 }
 
 function getMainScale() {
-  // Find the group with the most entities and use its scale
   if (groupScales.length === 0) return 100;
   var maxG = 0, maxC = 0;
   for (var g = 0; g < 16; g++) {
@@ -675,109 +1020,139 @@ function updateScaleDisplay() {
 
 function updateScaleDropdown() {
   var sel = document.getElementById('scalesel');
-  // Check if the detected scale is already in the dropdown
   var mainSc = getMainScale();
   var found = false;
   for (var i = 0; i < sel.options.length; i++) {
     if (parseFloat(sel.options[i].value) === mainSc) { found = true; break; }
   }
-  // Add irregular scale to dropdown if not present
   if (!found && mainSc > 1) {
     var opt = document.createElement('option');
     opt.value = mainSc;
     opt.textContent = '1/' + mainSc;
-    sel.insertBefore(opt, sel.options[sel.options.length]); // append before end
+    sel.insertBefore(opt, sel.options[sel.options.length]);
   }
   sel.value = 'auto';
 }
 
+// ===== Optimized draw with TypedArrays =====
 function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
+  var cw = cv.width, ch = cv.height;
 
   // Grid
   if (sc > 1.5) {
     var gs = 50 * sc; ctx.strokeStyle = '#1c2128'; ctx.lineWidth = 0.4;
-    for (var gx = ((tx % gs) + gs) % gs; gx < cv.width; gx += gs) {
-      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, cv.height); ctx.stroke();
+    for (var gx = ((tx % gs) + gs) % gs; gx < cw; gx += gs) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, ch); ctx.stroke();
     }
-    for (var gy = ((ty % gs) + gs) % gs; gy < cv.height; gy += gs) {
-      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cv.width, gy); ctx.stroke();
-    }
-  }
-
-  // Lines - grouped by layer+glayer for visibility filtering
-  if (vis.line && LINES.length) {
-    var groups = {};
-    LINES.forEach(function(l) {
-      if (!isEntityVisible(l)) return;
-      var key = l.layer + '_' + (l.glayer || 0);
-      if (!groups[key]) groups[key] = { layer: l.layer, glayer: l.glayer || 0, items: [] };
-      groups[key].items.push(l);
-    });
-    var sortedKeys = Object.keys(groups);
-    for (var ki = 0; ki < sortedKeys.length; ki++) {
-      var g = groups[sortedKeys[ki]];
-      var color = LAYER_COLORS[g.layer % LAYER_COLORS.length] || '#c9d1d9';
-      var lw = penWidth(1, sc);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lw;
-      ctx.beginPath();
-      for (var gi = 0; gi < g.items.length; gi++) {
-        var gl = g.items[gi];
-        var p1 = S(gl.x1, gl.y1), p2 = S(gl.x2, gl.y2);
-        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
-      }
-      ctx.stroke();
+    for (var gy = ((ty % gs) + gs) % gs; gy < ch; gy += gs) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(cw, gy); ctx.stroke();
     }
   }
 
-  // Arcs
-  if (vis.arc && ARCS.length) {
-    ARCS.forEach(function(a) {
-      if (!isEntityVisible(a)) return;
-      var asx = a.cx * sc + tx, asy = -a.cy * sc + ty, asr = a.r * sc;
-      if (asr < 0.3) return;
-      if (asx + asr < -50 || asx - asr > cv.width + 50 || asy + asr < -50 || asy - asr > cv.height + 50) return;
-      var acolor = LAYER_COLORS[a.layer % LAYER_COLORS.length] || '#a8e6cf';
-      ctx.strokeStyle = acolor;
-      ctx.lineWidth = penWidth(1, sc);
+  // Pre-compute layer visibility lookup (flat array for speed)
+  var layVis = new Uint8Array(256); // [glayer*16 + layer]
+  for (var vg = 0; vg < 16; vg++)
+    for (var vl = 0; vl < 16; vl++)
+      layVis[vg * 16 + vl] = (glayerVis[vg] && layerVis[vg][vl]) ? 1 : 0;
+
+  // Lines - sorted index, iterate only relevant entities per layer
+  if (vis.line && LINE_COUNT > 0 && LINE_SORTED) {
+    var lw = penWidth(1, sc);
+    ctx.lineWidth = lw;
+    for (var lc = 0; lc < 16; lc++) {
+      ctx.strokeStyle = LAYER_COLORS[lc];
       ctx.beginPath();
-      if (a.cat === 'circle') {
-        ctx.arc(asx, asy, asr, 0, Math.PI * 2);
-      } else {
-        var sweep = a.ea - a.sa;
-        var steps = Math.max(16, Math.round(Math.abs(sweep) * 16));
-        for (var asi = 0; asi <= steps; asi++) {
-          var at = asi / steps;
-          var theta = a.sa + sweep * at;
-          var apx = asx + asr * Math.cos(theta);
-          var apy = asy - asr * Math.sin(theta);
-          if (asi === 0) ctx.moveTo(apx, apy); else ctx.lineTo(apx, apy);
+      var lineBN = 0;
+      for (var lg = 0; lg < 16; lg++) {
+        if (!layVis[lg * 16 + lc]) continue;
+        var bk = lc * 16 + lg;
+        var bStart = LINE_LAYER_OFF[bk], bEnd = LINE_LAYER_OFF[bk + 1];
+        for (var bi = bStart; bi < bEnd; bi++) {
+          var li = LINE_SORTED[bi];
+          var lci = li * 4;
+          var p1x = LINE_COORDS[lci] * sc + tx;
+          var p1y = -LINE_COORDS[lci+1] * sc + ty;
+          var p2x = LINE_COORDS[lci+2] * sc + tx;
+          var p2y = -LINE_COORDS[lci+3] * sc + ty;
+          if ((p1x < -10 && p2x < -10) || (p1x > cw+10 && p2x > cw+10) ||
+              (p1y < -10 && p2y < -10) || (p1y > ch+10 && p2y > ch+10)) continue;
+          ctx.moveTo(p1x, p1y); ctx.lineTo(p2x, p2y);
+          lineBN++;
+          if (lineBN >= 5000) { ctx.stroke(); ctx.beginPath(); lineBN = 0; }
         }
       }
-      ctx.stroke();
-    });
+      if (lineBN > 0) ctx.stroke();
+    }
   }
 
-  // Texts
+  // Arcs - sorted index, flush every 500 arcs
+  if (vis.arc && ARC_COUNT > 0 && ARC_SORTED) {
+    var alw = penWidth(1, sc);
+    ctx.lineWidth = alw;
+    for (var ac = 0; ac < 16; ac++) {
+      ctx.strokeStyle = LAYER_COLORS[ac];
+      ctx.beginPath();
+      var arcBN = 0;
+      for (var ag = 0; ag < 16; ag++) {
+        if (!layVis[ag * 16 + ac]) continue;
+        var abk = ac * 16 + ag;
+        var abStart = ARC_LAYER_OFF[abk], abEnd = ARC_LAYER_OFF[abk + 1];
+        for (var abi = abStart; abi < abEnd; abi++) {
+          var ari = ARC_SORTED[abi];
+          var ami = ari * 3;
+          var aIsC = ARC_META[ami+2];
+          var adi = ari * 7;
+          var asx = ARC_DATA[adi] * sc + tx;
+          var asy = -ARC_DATA[adi+1] * sc + ty;
+          var asr = ARC_DATA[adi+2] * sc;
+          if (asr < 0.3) continue;
+          if (asx + asr < -50 || asx - asr > cw + 50 || asy + asr < -50 || asy - asr > ch + 50) continue;
+          if (aIsC) {
+            ctx.moveTo(asx + asr, asy);
+            ctx.arc(asx, asy, asr, 0, Math.PI * 2);
+          } else {
+            var asa = ARC_DATA[adi+3], aea = ARC_DATA[adi+4];
+            var sweep = aea - asa;
+            var steps = Math.min(200, Math.max(16, Math.round(Math.abs(sweep) * 16)));
+            for (var asi = 0; asi <= steps; asi++) {
+              var theta = asa + sweep * (asi / steps);
+              var apx = asx + asr * Math.cos(theta);
+              var apy = asy - asr * Math.sin(theta);
+              if (asi === 0) ctx.moveTo(apx, apy); else ctx.lineTo(apx, apy);
+            }
+          }
+          arcBN++;
+          if (arcBN >= 500) { ctx.stroke(); ctx.beginPath(); arcBN = 0; }
+        }
+      }
+      if (arcBN > 0) ctx.stroke();
+    }
+  }
+
+  // Texts (limit visible count to prevent OOM on large files)
   if (vis.text && sc > 0.3) {
-    TEXTS.forEach(function(t) {
-      if (!isEntityVisible(t)) return;
-      var ts = S(t.x, t.y);
-      if (ts.x < -200 || ts.x > cv.width + 200 || ts.y < -200 || ts.y > cv.height + 200) return;
+    var textDrawn = 0, TEXT_MAX = 2000;
+    for (var ti = 0; ti < TEXTS.length && textDrawn < TEXT_MAX; ti++) {
+      var t = TEXTS[ti];
+      var tg = t.glayer || 0, tl = t.layer || 0;
+      if (!layVis[tg * 16 + tl]) continue;
+      var tsx = t.x * sc + tx, tsy = -t.y * sc + ty;
+      if (tsx < -200 || tsx > cw + 200 || tsy < -200 || tsy > ch + 200) continue;
       var fs = Math.max(6, Math.min(22, t.sz * sc * 0.85));
-      if (fs < 6) return;
-      var tcolor = LAYER_COLORS[t.layer % LAYER_COLORS.length] || '#ffd700';
+      if (fs < 6) continue;
+      var tcolor = LAYER_COLORS[tl] || '#ffd700';
       ctx.font = fs + 'px "MS Gothic","\uFF2D\uFF33 \u30B4\u30B7\u30C3\u30AF",monospace';
       ctx.save();
-      ctx.translate(ts.x, ts.y);
+      ctx.translate(tsx, tsy);
       if (t.angle) ctx.rotate(-t.angle * Math.PI / 180);
       ctx.lineWidth = 2.5; ctx.strokeStyle = '#0d1117';
       ctx.strokeText(t.text, 0, 0);
       ctx.fillStyle = tcolor;
       ctx.fillText(t.text, 0, 0);
       ctx.restore();
-    });
+      textDrawn++;
+    }
   }
 
   // Measurement
@@ -805,53 +1180,93 @@ function draw() {
   if (szEl) szEl.textContent = sc.toFixed(1) + 'x';
 }
 
-// ===== File Loading =====
+// ===== File Loading (Web Worker) =====
+var currentWorker = null;
+
 function loadFile(file) {
   if (!file) return;
   var loading = document.getElementById('loading');
+  var loadText = document.getElementById('loading-text');
+  var loadFill = document.getElementById('loading-fill');
+  var loadDetail = document.getElementById('loading-detail');
   loading.style.display = 'flex';
+  loadText.textContent = '\u{1F4D0} \u89E3\u6790\u4E2D... (' + (file.size / 1024 / 1024).toFixed(1) + 'MB)';
+  loadFill.style.width = '0%';
+  loadDetail.textContent = '';
+
+  // Kill previous worker if running
+  if (currentWorker) { currentWorker.terminate(); currentWorker = null; }
 
   var reader = new FileReader();
-  reader.onload = function (e) {
-    try {
-      var result = parseJWW(e.target.result);
-      LINES = result.lines;
-      ARCS = result.arcs;
-      TEXTS = result.texts;
-      SNAP = result.snap;
-      groupScales = result.scales || [];
+  reader.onload = function(e) {
+    var worker = new Worker(workerUrl);
+    currentWorker = worker;
 
-      // Set scale from file
-      initLayers();
-      countLayers();
-
-      // Auto-select scale
-      sf = getMainScale();
-      scaleMode = 'auto';
-      updateScaleDropdown();
-      updateScaleDisplay();
-
-      // Build layer UI
-      curGroup = 0;
-      // Find first group with data
-      for (var fg = 0; fg < 16; fg++) {
-        if (groupTotal(fg) > 0) { curGroup = fg; break; }
+    worker.onmessage = function(msg) {
+      var d = msg.data;
+      if (d.type === 'progress') {
+        loadFill.style.width = d.pct + '%';
+        loadDetail.textContent = d.detail || '';
+        return;
       }
-      buildLayerUI();
-      updateWrapTop();
+      if (d.type === 'error') {
+        loading.style.display = 'none';
+        alert('\u8AAD\u307F\u8FBC\u307F\u30A8\u30E9\u30FC: ' + d.message);
+        currentWorker = null;
+        return;
+      }
+      if (d.type === 'done') {
+        var r = d.result;
+        LINE_COORDS = r.lineCoords;
+        LINE_META = r.lineMeta;
+        LINE_COUNT = r.lineCount;
+        LINE_SORTED = r.lineSorted;
+        LINE_LAYER_OFF = r.lineLayerOff;
+        ARC_DATA = r.arcData;
+        ARC_META = r.arcMeta;
+        ARC_COUNT = r.arcCount;
+        ARC_SORTED = r.arcSorted;
+        ARC_LAYER_OFF = r.arcLayerOff;
+        TEXTS = r.texts;
+        SNAP_COORDS = r.snapCoords;
+        SNAP_COUNT = r.snapCount;
+        groupScales = r.scales || [];
 
-      document.getElementById('splash').style.display = 'none';
-      document.getElementById('fname').textContent = file.name +
-        ' (\u7DDA:' + LINES.length + ' \u5F27:' + ARCS.length + ' \u5B57:' + TEXTS.length +
-        ' v' + (result.version || '?') + ')';
+        initLayers();
+        countLayers();
 
+        sf = getMainScale();
+        scaleMode = 'auto';
+        updateScaleDropdown();
+        updateScaleDisplay();
+
+        curGroup = 0;
+        for (var fg = 0; fg < 16; fg++) {
+          if (groupTotal(fg) > 0) { curGroup = fg; break; }
+        }
+        buildLayerUI();
+        updateWrapTop();
+
+        document.getElementById('splash').style.display = 'none';
+        document.getElementById('fname').textContent = file.name +
+          ' (\u7DDA:' + LINE_COUNT + ' \u5F27:' + ARC_COUNT + ' \u5B57:' + TEXTS.length +
+          ' v' + (r.version || '?') + ')';
+
+        loading.style.display = 'none';
+        currentWorker = null;
+        resize();
+        fitView();
+      }
+    };
+
+    worker.onerror = function(err) {
       loading.style.display = 'none';
-      resize();
-      fitView();
-    } catch (err) {
-      loading.style.display = 'none';
-      alert('\u8AAD\u307F\u8FBC\u307F\u30A8\u30E9\u30FC: ' + err.message);
-    }
+      alert('\u30D1\u30FC\u30B5\u30FC\u30A8\u30E9\u30FC: ' + (err.message || 'unknown'));
+      currentWorker = null;
+    };
+
+    // Transfer buffer to worker (zero-copy)
+    worker.postMessage(e.target.result, [e.target.result]);
   };
   reader.readAsArrayBuffer(file);
 }
