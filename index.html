@@ -52,6 +52,26 @@ canvas{display:block}
 #loading{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(13,17,23,0.9);
   display:none;align-items:center;justify-content:center;z-index:1000;font-size:16px;color:#58a6ff}
 
+/* Layer panel */
+#lpanel{position:fixed;top:44px;left:0;right:0;background:#161b22;
+  border-bottom:2px solid #21262d;display:none;z-index:90;padding:6px 10px;
+  font-size:10px}
+#lpanel.show{display:block}
+#lgroups{display:flex;gap:2px;margin-bottom:4px;align-items:center;flex-wrap:wrap}
+#lgroups .glabel{color:#8b949e;margin-right:2px;flex-shrink:0}
+.gbtn{padding:2px 6px;border-radius:3px;cursor:pointer;border:1px solid #30363d;
+  background:#21262d;color:#6e7681;font-size:10px;transition:all .12s;min-width:22px;text-align:center}
+.gbtn.on{background:#1f6feb;border-color:#58a6ff;color:#fff}
+.gbtn.has{color:#c9d1d9}
+.gbtn.cur{box-shadow:0 0 0 2px #f0883e}
+#llayers{display:flex;gap:2px;align-items:center;flex-wrap:wrap}
+#llayers .llabel{color:#8b949e;margin-right:2px;flex-shrink:0}
+.lbtn2{padding:2px 6px;border-radius:3px;cursor:pointer;border:1px solid #30363d;
+  background:#21262d;color:#6e7681;font-size:10px;transition:all .12s;min-width:22px;text-align:center}
+.lbtn2.on{font-weight:bold}
+.lbtn2.has{color:#c9d1d9}
+#linfo{color:#6e7681;font-size:9px;margin-top:3px}
+
 @supports(padding: env(safe-area-inset-top)){
   #hdr{padding-top:env(safe-area-inset-top);height:calc(44px + env(safe-area-inset-top))}
   #wrap{top:calc(44px + env(safe-area-inset-top))}
@@ -85,15 +105,18 @@ canvas{display:block}
   <button class="btn" onclick="fitView()">&#x229E;&#x5168;&#x4F53;</button>
   <div class="sep"></div>
   <span style="font-size:10px;color:#8b949e;flex-shrink:0">&#x7E2E;&#x5C3A;</span>
-  <select id="scalesel" onchange="sf=parseFloat(this.value);clearMs()">
+  <select id="scalesel" onchange="onScaleChange(this.value)">
+    <option value="auto" selected>&#x81EA;&#x52D5;</option>
     <option value="1">&#x751F;(mm)</option>
-    <option value="100" selected>1/100</option>
     <option value="50">1/50</option>
+    <option value="100">1/100</option>
     <option value="200">1/200</option>
     <option value="250">1/250</option>
     <option value="300">1/300</option>
     <option value="500">1/500</option>
   </select>
+  <div class="sep"></div>
+  <button class="btn" id="layerbtn" onclick="toggleLayerPanel()">&#x1F4CB;&#x30EC;&#x30A4;&#x30E4;&#x30FC;</button>
   <div class="sep"></div>
   <div class="lbtn on" id="tbtn_line" style="color:#e6edf3;border-color:#454e58" onclick="tog('line',this)">&#x7DDA;</div>
   <div class="lbtn on" id="tbtn_arc" style="color:#a8e6cf;border-color:#a8e6cf" onclick="tog('arc',this)">&#x5186;&#x5F27;</div>
@@ -104,6 +127,14 @@ canvas{display:block}
   </label>
   <span id="fname" style="font-size:10px;color:#6e7681;margin-left:8px;flex-shrink:0"></span>
 </div>
+
+<!-- Layer Panel (dropdown below header) -->
+<div id="lpanel">
+  <div id="lgroups"><span class="glabel">G:</span></div>
+  <div id="llayers"><span class="llabel">L:</span></div>
+  <div id="linfo"></div>
+</div>
+
 <div id="wrap"><canvas id="cv"></canvas></div>
 <div id="sni"></div>
 <div id="mbox">
@@ -116,9 +147,9 @@ canvas{display:block}
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer v13</h2>
+    <h2>JWW Viewer v14</h2>
     <p>Jw_cad&#x56F3;&#x9762;&#x30D3;&#x30E5;&#x30FC;&#x30A2;<br>JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x3044;&#x3066;&#x95B2;&#x89A7;&#x30FB;&#x8A08;&#x6E2C;&#x3067;&#x304D;&#x307E;&#x3059;<br>
-    <small style="color:#6e7681">MFC&#x6E96;&#x62E0;&#x30D1;&#x30FC;&#x30B5;&#x30FC;&#x30FB;&#x5168;&#x30D0;&#x30FC;&#x30B8;&#x30E7;&#x30F3;&#x5BFE;&#x5FDC;</small></p>
+    <small style="color:#6e7681">MFC&#x6E96;&#x62E0;&#x30D1;&#x30FC;&#x30B5;&#x30FC;&#x30FB;&#x30EC;&#x30A4;&#x30E4;&#x30FC;&#x5BFE;&#x5FDC;&#x30FB;&#x7E2E;&#x5C3A;&#x81EA;&#x52D5;&#x691C;&#x51FA;</small></p>
     <button class="open-large" onclick="document.getElementById('filein').click()">&#x1F4C2; JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x304F;</button>
   </div>
 </div>
@@ -127,57 +158,44 @@ canvas{display:block}
   &#x30E2;&#x30FC;&#x30C9;:<span class="v" id="sm">&#x8868;&#x793A;</span>
   &nbsp;&#x5EA7;&#x6A19;:<span class="v" id="sp">---</span>
   &nbsp;&#x30BA;&#x30FC;&#x30E0;:<span class="v" id="sz">1x</span>
+  &nbsp;&#x7E2E;&#x5C3A;:<span class="v" id="sscale">---</span>
 </div>
 
 <script>
 // ===== JWW Layer Colors (dark background optimized) =====
-const LAYER_COLORS = [
+var LAYER_COLORS = [
   '#e6edf3', '#58a6ff', '#3fb950', '#bc8cff',
   '#388bfd', '#d29922', '#f0883e', '#f85149',
   '#c9d1d9', '#79c0ff', '#56d364', '#d2a8ff',
   '#6cb6ff', '#e3b341', '#ffa657', '#ff7b72',
 ];
+var HEX = '0123456789ABCDEF';
 
 function penWidth(pen, sc) {
-  const base = Math.max(0.4, sc * 0.03);
-  switch (pen) {
-    case 1: return base;
-    case 2: return base * 2.5;
-    case 3: return base * 3.5;
-    case 4: return base * 4;
-    case 5: return base * 4.5;
-    case 6: return base * 5;
-    case 7: return base * 5.5;
-    case 8: return base * 6;
-    default: return base;
-  }
+  return Math.max(0.5, sc * 0.04);
 }
 
-// ===== MFC-aware JWW Binary Parser (v13) =====
-// Properly parses JWW files by finding MFC class definitions and
-// dynamically determining back-reference tags for each record type.
+// ===== MFC-aware JWW Binary Parser (v14) =====
 function parseJWW(buffer) {
-  const data = new Uint8Array(buffer);
-  const view = new DataView(buffer);
-  const len = data.length;
+  var data = new Uint8Array(buffer);
+  var view = new DataView(buffer);
+  var len = data.length;
 
-  // Header: "JwwData." (8 bytes) + version (DWORD)
-  if (len < 12 || String.fromCharCode(...data.slice(0, 7)) !== 'JwwData')
+  if (len < 12 || String.fromCharCode.apply(null, data.slice(0, 7)) !== 'JwwData')
     throw new Error('JWW\u30D5\u30A1\u30A4\u30EB\u3067\u306F\u3042\u308A\u307E\u305B\u3093');
 
-  const version = view.getUint32(8, true);
-  // CData base header: group(4)+penStyle(1)+penColor(2)+[penWidth(2) if v>=351]+layer(2)+glayer(2)+sflg(2)
-  const cdSz = (version >= 351) ? 15 : 13;
+  var version = view.getUint32(8, true);
+  var cdSz = (version >= 351) ? 15 : 13;
 
-  const lines = [], arcs = [], texts = [];
-  const sjis = new TextDecoder('shift_jis');
-  const utf16 = new TextDecoder('utf-16le');
+  var lines = [], arcs = [], texts = [];
+  var sjis = new TextDecoder('shift_jis');
+  var utf16 = new TextDecoder('utf-16le');
 
   // ---- Find ASCII byte sequence in binary ----
   function findStr(str, from) {
-    const nl = str.length;
-    outer: for (let i = from || 0; i <= len - nl; i++) {
-      for (let j = 0; j < nl; j++) {
+    var nl = str.length;
+    outer: for (var i = from || 0; i <= len - nl; i++) {
+      for (var j = 0; j < nl; j++) {
         if (data[i + j] !== str.charCodeAt(j)) continue outer;
       }
       return i;
@@ -185,10 +203,9 @@ function parseJWW(buffer) {
     return -1;
   }
 
-  // ---- Find MFC class definition: 0xFFFF(2) + schema(2) + nameLen(2) + name ----
-  // Returns offset right after class name (= first record's CData), or -1
+  // ---- Find MFC class definition ----
   function findClassDef(className) {
-    const pos = findStr(className, 6);
+    var pos = findStr(className, 6);
     if (pos < 6) return -1;
     if (view.getUint16(pos - 6, true) === 0xFFFF &&
         view.getUint16(pos - 2, true) === className.length)
@@ -199,10 +216,10 @@ function parseJWW(buffer) {
   // ---- Parse CData base header ----
   function parseCData(off) {
     if (off + cdSz > len) return null;
-    const lOff = cdSz === 15 ? 9 : 7;
-    const gOff = cdSz === 15 ? 11 : 9;
-    const layer = view.getUint16(off + lOff, true);
-    const glayer = view.getUint16(off + gOff, true);
+    var lOff = cdSz === 15 ? 9 : 7;
+    var gOff = cdSz === 15 ? 11 : 9;
+    var layer = view.getUint16(off + lOff, true);
+    var glayer = view.getUint16(off + gOff, true);
     if (layer > 15 || glayer > 15) return null;
     return {
       penStyle: data[off + 4],
@@ -216,7 +233,6 @@ function parseJWW(buffer) {
   // ---- Read MFC CString (UTF-16LE or Shift-JIS) ----
   function readCStr(pos) {
     if (pos + 1 >= len) return null;
-    // UTF-16LE: FF FE FF + charCount + data
     if (pos + 4 <= len && data[pos] === 0xFF && data[pos+1] === 0xFE && data[pos+2] === 0xFF) {
       var cc, hdr;
       if (data[pos + 3] < 0xFF) {
@@ -233,7 +249,6 @@ function parseJWW(buffer) {
       try { return { text: utf16.decode(data.slice(hdr, hdr + cc * 2)), end: hdr + cc * 2 }; }
       catch(e) { return null; }
     }
-    // Shift-JIS: byteCount + data
     var bc2, hdr2;
     if (data[pos] < 0xFF) {
       bc2 = data[pos]; hdr2 = pos + 1;
@@ -251,12 +266,40 @@ function parseJWW(buffer) {
     catch(e) { return null; }
   }
 
-  // ---- Scan boundary: exclude block definition sub-data ----
+  // ===== Read group scales from header =====
+  // Groups 0-F each have a CString name followed by fields, with scale at offset +16 after name end
+  // Stride between groups: 148 bytes
+  var scales = [];
+  try {
+    var nameR = readCStr(12);
+    if (nameR) {
+      var firstScale = nameR.end + 16;
+      for (var gi = 0; gi < 16; gi++) {
+        var sOff = firstScale + gi * 148;
+        if (sOff + 8 <= len) {
+          var sv = view.getFloat64(sOff, true);
+          if (isFinite(sv) && sv >= 0.1 && sv <= 100000) {
+            scales.push(sv);
+          } else {
+            scales.push(1);
+          }
+        } else {
+          scales.push(1);
+        }
+      }
+    }
+  } catch(e) {
+    // fallback: no scale info
+  }
+  if (scales.length < 16) {
+    while (scales.length < 16) scales.push(100);
+  }
+
+  // ---- Scan boundary ----
   var listDef = findClassDef('CDataList');
   var scanEnd = listDef > 0 ? listDef : len;
 
   // ===== Parse CDataSen (lines) =====
-  // After CData: startX(8) + startY(8) + endX(8) + endY(8) = 32 bytes
   var senDef = findClassDef('CDataSen');
   if (senDef > 0) {
     var cd0 = parseCData(senDef);
@@ -267,9 +310,8 @@ function parseJWW(buffer) {
       if ([sx1,sy1,sx2,sy2].every(function(v){return isFinite(v) && Math.abs(v)<1e7;})) {
         var sll = Math.hypot(sx2-sx1, sy2-sy1);
         if (sll > 0.001 && sll < 1e7)
-          lines.push({x1:sx1, y1:sy1, x2:sx2, y2:sy2, pen:cd0.penColor, layer:cd0.layer});
+          lines.push({x1:sx1, y1:sy1, x2:sx2, y2:sy2, pen:cd0.penColor, layer:cd0.layer, glayer:cd0.glayer});
       }
-      // Read back-reference tag
       var st = o + 32;
       if (st + 1 < len && (data[st+1] & 0x80)) {
         var stag0 = data[st], stag1 = data[st+1];
@@ -284,7 +326,7 @@ function parseJWW(buffer) {
             if ([lx1,ly1,lx2,ly2].every(function(v){return isFinite(v) && Math.abs(v)<1e7;})) {
               var ll = Math.hypot(lx2-lx1, ly2-ly1);
               if (ll > 0.001 && ll < 1e7) {
-                lines.push({x1:lx1, y1:ly1, x2:lx2, y2:ly2, pen:scd.penColor, layer:scd.layer});
+                lines.push({x1:lx1, y1:ly1, x2:lx2, y2:ly2, pen:scd.penColor, layer:scd.layer, glayer:scd.glayer});
                 si = so + 31;
               }
             }
@@ -295,7 +337,6 @@ function parseJWW(buffer) {
   }
 
   // ===== Parse CDataEnko (arcs/circles) =====
-  // After CData: cx(8)+cy(8)+r(8)+startAngle(8)+arcAngle(8)+tiltAngle(8)+flatRatio(8)+fullCircleFlag(4) = 60 bytes
   var enkDef = findClassDef('CDataEnko');
   if (enkDef > 0) {
     function parseArc(cdOff) {
@@ -312,7 +353,7 @@ function parseJWW(buffer) {
       arcs.push({
         cx:cx, cy:cy, r:r, sa:sa, ea:sa+arcA, tilt:tilt, flat:flat,
         cat: isCircle ? 'circle' : 'arc',
-        pen: cd.penColor, layer: cd.layer
+        pen: cd.penColor, layer: cd.layer, glayer: cd.glayer
       });
       return ao + 60;
     }
@@ -329,7 +370,6 @@ function parseJWW(buffer) {
   }
 
   // ===== Parse CDataMoji (text) =====
-  // After CData: x1(8)+y1(8)+x2(8)+y2(8)+mojiShu(4)+sizeX(8)+sizeY(8)+kankaku(8)+kakudo(8) = 68 bytes + fontCStr + textCStr
   var mojiDef = findClassDef('CDataMoji');
   if (mojiDef > 0) {
     function parseMoji(cdOff) {
@@ -351,7 +391,8 @@ function parseJWW(buffer) {
         sz: Math.max(msX, msY),
         text: textR.text,
         angle: mkak,
-        layer: cd.layer
+        layer: cd.layer,
+        glayer: cd.glayer
       });
       return textR.end;
     }
@@ -379,17 +420,186 @@ function parseJWW(buffer) {
     }
   }
 
-  return { lines: lines, arcs: arcs, texts: texts, snap: snap };
+  return { lines: lines, arcs: arcs, texts: texts, snap: snap, scales: scales, version: version };
 }
 
 // ===== Viewer State =====
 var LINES = [], ARCS = [], TEXTS = [], SNAP = [];
 var vis = { line: true, arc: true, text: true };
 var sf = 100;
+var scaleMode = 'auto';
+var groupScales = []; // scales[0..15] from file
 var cv = document.getElementById('cv');
 var ctx = cv.getContext('2d');
 var sni = document.getElementById('sni');
 var mode = 'view', tx = 0, ty = 0, sc = 1, drag = false, dx0 = 0, dy0 = 0, pts = [];
+
+// ===== Layer Visibility =====
+var glayerVis = []; // [0..15] = true/false
+var layerVis = [];  // [0..15][0..15] = true/false
+var curGroup = 0;   // currently selected group for layer display
+var layerCounts = []; // [g][l] = count of entities
+
+function initLayers() {
+  glayerVis = [];
+  layerVis = [];
+  layerCounts = [];
+  for (var g = 0; g < 16; g++) {
+    glayerVis.push(true);
+    layerVis.push([]);
+    layerCounts.push([]);
+    for (var l = 0; l < 16; l++) {
+      layerVis[g].push(true);
+      layerCounts[g].push(0);
+    }
+  }
+}
+initLayers();
+
+function countLayers() {
+  for (var g = 0; g < 16; g++)
+    for (var l = 0; l < 16; l++)
+      layerCounts[g][l] = 0;
+
+  var allItems = LINES.concat(ARCS).concat(TEXTS);
+  for (var i = 0; i < allItems.length; i++) {
+    var it = allItems[i];
+    var g = it.glayer || 0;
+    var l = it.layer || 0;
+    if (g >= 0 && g < 16 && l >= 0 && l < 16)
+      layerCounts[g][l]++;
+  }
+}
+
+function groupTotal(g) {
+  var t = 0;
+  for (var l = 0; l < 16; l++) t += layerCounts[g][l];
+  return t;
+}
+
+function isEntityVisible(item) {
+  var g = item.glayer || 0;
+  var l = item.layer || 0;
+  return glayerVis[g] && layerVis[g][l];
+}
+
+// ===== Layer Panel UI =====
+function toggleLayerPanel() {
+  var p = document.getElementById('lpanel');
+  p.classList.toggle('show');
+  var b = document.getElementById('layerbtn');
+  b.classList.toggle('on', p.classList.contains('show'));
+  updateWrapTop();
+}
+
+function updateWrapTop() {
+  var p = document.getElementById('lpanel');
+  var wrap = document.getElementById('wrap');
+  var splash = document.getElementById('splash');
+  if (p.classList.contains('show')) {
+    var h = p.offsetHeight;
+    wrap.style.top = (44 + h) + 'px';
+    splash.style.top = (44 + h) + 'px';
+  } else {
+    wrap.style.top = '44px';
+    splash.style.top = '44px';
+  }
+  resize();
+}
+
+function buildLayerUI() {
+  var gDiv = document.getElementById('lgroups');
+  gDiv.innerHTML = '<span class="glabel">G:</span>';
+  for (var g = 0; g < 16; g++) {
+    var btn = document.createElement('div');
+    btn.className = 'gbtn';
+    btn.textContent = HEX[g];
+    btn.setAttribute('data-g', g);
+    var gt = groupTotal(g);
+    if (gt > 0) btn.classList.add('has');
+    if (glayerVis[g]) btn.classList.add('on');
+    if (g === curGroup) btn.classList.add('cur');
+    btn.onclick = (function(gg) {
+      return function(e) {
+        if (e.shiftKey) {
+          // Shift+click: toggle group visibility
+          glayerVis[gg] = !glayerVis[gg];
+        } else {
+          // Normal click: select this group for layer display
+          curGroup = gg;
+        }
+        buildLayerUI();
+        draw();
+      };
+    })(g);
+    gDiv.appendChild(btn);
+  }
+
+  // Add "All ON" / "All OFF" buttons for groups
+  var allOnG = document.createElement('div');
+  allOnG.className = 'gbtn';
+  allOnG.textContent = 'All';
+  allOnG.style.marginLeft = '4px';
+  allOnG.style.color = '#3fb950';
+  allOnG.onclick = function() {
+    for (var i = 0; i < 16; i++) glayerVis[i] = true;
+    buildLayerUI(); draw();
+  };
+  gDiv.appendChild(allOnG);
+
+  // Build layer buttons for current group
+  var lDiv = document.getElementById('llayers');
+  lDiv.innerHTML = '<span class="llabel">L(G' + HEX[curGroup] + '):</span>';
+  for (var l = 0; l < 16; l++) {
+    var lbtn = document.createElement('div');
+    lbtn.className = 'lbtn2';
+    lbtn.textContent = HEX[l];
+    lbtn.setAttribute('data-l', l);
+    var lc = layerCounts[curGroup][l];
+    if (lc > 0) lbtn.classList.add('has');
+    if (layerVis[curGroup][l]) {
+      lbtn.classList.add('on');
+      lbtn.style.color = LAYER_COLORS[l];
+      lbtn.style.borderColor = LAYER_COLORS[l];
+    }
+    lbtn.title = lc + ' entities';
+    lbtn.onclick = (function(ll) {
+      return function() {
+        layerVis[curGroup][ll] = !layerVis[curGroup][ll];
+        buildLayerUI();
+        draw();
+      };
+    })(l);
+    lDiv.appendChild(lbtn);
+  }
+
+  // All ON/OFF for layers
+  var allOnL = document.createElement('div');
+  allOnL.className = 'lbtn2';
+  allOnL.textContent = 'All';
+  allOnL.style.marginLeft = '4px';
+  allOnL.style.color = '#3fb950';
+  allOnL.onclick = function() {
+    for (var i = 0; i < 16; i++) layerVis[curGroup][i] = true;
+    buildLayerUI(); draw();
+  };
+  lDiv.appendChild(allOnL);
+
+  var noneL = document.createElement('div');
+  noneL.className = 'lbtn2';
+  noneL.textContent = 'None';
+  noneL.style.color = '#f85149';
+  noneL.onclick = function() {
+    for (var i = 0; i < 16; i++) layerVis[curGroup][i] = false;
+    buildLayerUI(); draw();
+  };
+  lDiv.appendChild(noneL);
+
+  // Info line
+  var info = document.getElementById('linfo');
+  var gsc = groupScales[curGroup] || 100;
+  info.textContent = 'G' + HEX[curGroup] + ': ' + groupTotal(curGroup) + ' entities, scale 1/' + gsc;
+}
 
 function tog(k, el) { vis[k] = !vis[k]; el.classList.toggle('on', vis[k]); draw(); }
 function resize() { cv.width = cv.parentElement.clientWidth; cv.height = cv.parentElement.clientHeight; draw(); }
@@ -398,10 +608,12 @@ function fitView() {
   if (LINES.length === 0 && ARCS.length === 0) return;
   var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   LINES.forEach(function(l) {
+    if (!isEntityVisible(l)) return;
     x0 = Math.min(x0, l.x1, l.x2); x1 = Math.max(x1, l.x1, l.x2);
     y0 = Math.min(y0, l.y1, l.y2); y1 = Math.max(y1, l.y1, l.y2);
   });
   ARCS.forEach(function(a) {
+    if (!isEntityVisible(a)) return;
     x0 = Math.min(x0, a.cx - a.r); x1 = Math.max(x1, a.cx + a.r);
     y0 = Math.min(y0, a.cy - a.r); y1 = Math.max(y1, a.cy + a.r);
   });
@@ -427,6 +639,58 @@ function snapPt(sx, sy) {
   return b;
 }
 
+// ===== Scale handling =====
+function onScaleChange(val) {
+  if (val === 'auto') {
+    scaleMode = 'auto';
+    // Use the most common scale from file
+    sf = getMainScale();
+  } else {
+    scaleMode = 'manual';
+    sf = parseFloat(val);
+  }
+  updateScaleDisplay();
+  clearMs();
+}
+
+function getMainScale() {
+  // Find the group with the most entities and use its scale
+  if (groupScales.length === 0) return 100;
+  var maxG = 0, maxC = 0;
+  for (var g = 0; g < 16; g++) {
+    var c = groupTotal(g);
+    if (c > maxC) { maxC = c; maxG = g; }
+  }
+  return groupScales[maxG] || 100;
+}
+
+function updateScaleDisplay() {
+  var el = document.getElementById('sscale');
+  if (sf === 1) {
+    el.textContent = '\u751F(mm)';
+  } else {
+    el.textContent = '1/' + sf;
+  }
+}
+
+function updateScaleDropdown() {
+  var sel = document.getElementById('scalesel');
+  // Check if the detected scale is already in the dropdown
+  var mainSc = getMainScale();
+  var found = false;
+  for (var i = 0; i < sel.options.length; i++) {
+    if (parseFloat(sel.options[i].value) === mainSc) { found = true; break; }
+  }
+  // Add irregular scale to dropdown if not present
+  if (!found && mainSc > 1) {
+    var opt = document.createElement('option');
+    opt.value = mainSc;
+    opt.textContent = '1/' + mainSc;
+    sel.insertBefore(opt, sel.options[sel.options.length]); // append before end
+  }
+  sel.value = 'auto';
+}
+
 function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
 
@@ -441,19 +705,20 @@ function draw() {
     }
   }
 
-  // Lines - grouped by pen+layer
+  // Lines - grouped by layer+glayer for visibility filtering
   if (vis.line && LINES.length) {
     var groups = {};
     LINES.forEach(function(l) {
-      var key = l.pen + '_' + l.layer;
-      if (!groups[key]) groups[key] = { pen: l.pen, layer: l.layer, items: [] };
+      if (!isEntityVisible(l)) return;
+      var key = l.layer + '_' + (l.glayer || 0);
+      if (!groups[key]) groups[key] = { layer: l.layer, glayer: l.glayer || 0, items: [] };
       groups[key].items.push(l);
     });
-    var sortedKeys = Object.keys(groups).sort(function(a, b) { return groups[a].pen - groups[b].pen; });
+    var sortedKeys = Object.keys(groups);
     for (var ki = 0; ki < sortedKeys.length; ki++) {
       var g = groups[sortedKeys[ki]];
       var color = LAYER_COLORS[g.layer % LAYER_COLORS.length] || '#c9d1d9';
-      var lw = penWidth(g.pen, sc);
+      var lw = penWidth(1, sc);
       ctx.strokeStyle = color;
       ctx.lineWidth = lw;
       ctx.beginPath();
@@ -469,12 +734,13 @@ function draw() {
   // Arcs
   if (vis.arc && ARCS.length) {
     ARCS.forEach(function(a) {
+      if (!isEntityVisible(a)) return;
       var asx = a.cx * sc + tx, asy = -a.cy * sc + ty, asr = a.r * sc;
       if (asr < 0.3) return;
       if (asx + asr < -50 || asx - asr > cv.width + 50 || asy + asr < -50 || asy - asr > cv.height + 50) return;
       var acolor = LAYER_COLORS[a.layer % LAYER_COLORS.length] || '#a8e6cf';
       ctx.strokeStyle = acolor;
-      ctx.lineWidth = penWidth(a.pen || 1, sc);
+      ctx.lineWidth = penWidth(1, sc);
       ctx.beginPath();
       if (a.cat === 'circle') {
         ctx.arc(asx, asy, asr, 0, Math.PI * 2);
@@ -496,6 +762,7 @@ function draw() {
   // Texts
   if (vis.text && sc > 0.3) {
     TEXTS.forEach(function(t) {
+      if (!isEntityVisible(t)) return;
       var ts = S(t.x, t.y);
       if (ts.x < -200 || ts.x > cv.width + 200 || ts.y < -200 || ts.y > cv.height + 200) return;
       var fs = Math.max(6, Math.min(22, t.sz * sc * 0.85));
@@ -552,10 +819,31 @@ function loadFile(file) {
       ARCS = result.arcs;
       TEXTS = result.texts;
       SNAP = result.snap;
+      groupScales = result.scales || [];
+
+      // Set scale from file
+      initLayers();
+      countLayers();
+
+      // Auto-select scale
+      sf = getMainScale();
+      scaleMode = 'auto';
+      updateScaleDropdown();
+      updateScaleDisplay();
+
+      // Build layer UI
+      curGroup = 0;
+      // Find first group with data
+      for (var fg = 0; fg < 16; fg++) {
+        if (groupTotal(fg) > 0) { curGroup = fg; break; }
+      }
+      buildLayerUI();
+      updateWrapTop();
 
       document.getElementById('splash').style.display = 'none';
       document.getElementById('fname').textContent = file.name +
-        ' (\u7DDA:' + LINES.length + ' \u5F27:' + ARCS.length + ' \u5B57:' + TEXTS.length + ')';
+        ' (\u7DDA:' + LINES.length + ' \u5F27:' + ARCS.length + ' \u5B57:' + TEXTS.length +
+        ' v' + (result.version || '?') + ')';
 
       loading.style.display = 'none';
       resize();
