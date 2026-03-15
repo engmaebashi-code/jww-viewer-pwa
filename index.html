@@ -152,7 +152,7 @@ canvas{display:block}
 </div>
 <div id="splash">
   <div id="splash-inner">
-    <h2>JWW Viewer v15</h2>
+    <h2>JWW Viewer v16</h2>
     <p>Jw_cad&#x56F3;&#x9762;&#x30D3;&#x30E5;&#x30FC;&#x30A2;<br>JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x3044;&#x3066;&#x95B2;&#x89A7;&#x30FB;&#x8A08;&#x6E2C;&#x3067;&#x304D;&#x307E;&#x3059;<br>
     <small style="color:#6e7681">MFC&#x6E96;&#x62E0;&#x30D1;&#x30FC;&#x30B5;&#x30FC;&#x30FB;&#x30EC;&#x30A4;&#x30E4;&#x30FC;&#x5BFE;&#x5FDC;&#x30FB;&#x5927;&#x5BB9;&#x91CF;&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x5BFE;&#x5FDC;</small></p>
     <button class="open-large" onclick="document.getElementById('filein').click()">&#x1F4C2; JWW&#x30D5;&#x30A1;&#x30A4;&#x30EB;&#x3092;&#x958B;&#x304F;</button>
@@ -173,7 +173,7 @@ canvas{display:block}
 <script>
 // ===== Web Worker for JWW parsing (inline blob) =====
 var WORKER_CODE = function() {
-  // ===== MFC-aware JWW Binary Parser (v15 - memory optimized) =====
+  // ===== MFC-aware JWW Binary Parser (v16 - full-file scan, stride-based tag discovery) =====
   self.onmessage = function(e) {
     try {
       var result = parseJWW(e.data);
@@ -204,12 +204,13 @@ var WORKER_CODE = function() {
     var cdSz = (version >= 351) ? 15 : 13;
 
     // Pre-allocate typed arrays (grow as needed)
-    var LINE_CHUNK = 50000;
+    // Size chunks based on file size (large files have many more entities)
+    var LINE_CHUNK = len > 5000000 ? 200000 : 50000;
     var lineCoords = new Float64Array(LINE_CHUNK * 4); // x1,y1,x2,y2
     var lineMeta = new Uint8Array(LINE_CHUNK * 2); // layer, glayer
     var lineCount = 0;
 
-    var ARC_CHUNK = 20000;
+    var ARC_CHUNK = len > 5000000 ? 80000 : 20000;
     var arcData = new Float64Array(ARC_CHUNK * 7); // cx,cy,r,sa,ea,tilt,flat
     var arcMeta = new Uint8Array(ARC_CHUNK * 3); // layer, glayer, isCircle
     var arcCount = 0;
@@ -369,16 +370,10 @@ var WORKER_CODE = function() {
     var blockDef = findClassDef('CDataBlock');
     var listDef = findClassDef('CDataList');
 
-    // Entity scan boundary: stop at the earliest non-entity class definition
-    // (CDataTen, CDataSolidFigure, CDataBlock, CDataList)
-    // All entity types (Sen, Enko, Moji) share this boundary since they're interleaved
+    // Scan the entire file for entities. CDataSen/Enko/Moji appear both as
+    // top-level entities AND embedded inside CDataTen/CDataSunpou/CDataSolid.
+    // The same MFC tags are reused for embedded entities throughout the file.
     var scanEnd = len;
-    var boundaries = [tenDef, solidDef, blockDef, listDef];
-    for (var bi = 0; bi < boundaries.length; bi++) {
-      if (boundaries[bi] > 0 && boundaries[bi] < scanEnd) {
-        scanEnd = boundaries[bi] - 20; // back up before FFFF class def header
-      }
-    }
 
     self.postMessage({type: 'progress', pct: 10, detail: '\u30D8\u30C3\u30C0\u30FC\u89E3\u6790\u5B8C\u4E86'});
 
@@ -389,114 +384,48 @@ var WORKER_CODE = function() {
     // After parsing an entity of known size, the next bytes must be a valid tag.
     // This sequential chaining eliminates false positive tag matches.
 
-    // Step 1: Parse first instances (at class definition positions)
+    // Step 1: Determine seqStart (first entity data position) from class definitions
     var senTag = -1, enkTag = -1, mojiTag = -1;
     var seqStart = -1;
 
-    // Parse first CDataSen
-    if (senDef > 0) {
-      var cd0 = parseCData(senDef);
-      if (cd0 >= 0) {
-        var o = cd0 + cdSz;
-        if (o + 32 <= len) {
-          var sx1 = view.getFloat64(o, true), sy1 = view.getFloat64(o+8, true);
-          var sx2 = view.getFloat64(o+16, true), sy2 = view.getFloat64(o+24, true);
-          if (isFinite(sx1) && isFinite(sy1) && isFinite(sx2) && isFinite(sy2) &&
-              Math.abs(sx1)<1e7 && Math.abs(sy1)<1e7 && Math.abs(sx2)<1e7 && Math.abs(sy2)<1e7) {
-            var sll = Math.hypot(sx2-sx1, sy2-sy1);
-            if (sll > 0.001 && sll < 1e7)
-              addLine(sx1, sy1, sx2, sy2, getCDLayer(cd0), getCDGlayer(cd0));
-          }
-          // senTag: read from next bytes (the next entity is always same-type CDataSen)
-          var senTagPos = o + 32;
-          if (senTagPos + 1 < len && (data[senTagPos+1] & 0x80)) {
-            senTag = data[senTagPos] | (data[senTagPos+1] << 8);
-          }
-        }
+    // Find earliest entity class def position as search start
+    if (senDef > 0) seqStart = senDef;
+    if (enkDef > 0 && (seqStart < 0 || enkDef < seqStart)) seqStart = enkDef;
+    if (mojiDef > 0 && (seqStart < 0 || mojiDef < seqStart)) seqStart = mojiDef;
+
+    // Step 2: Discover ALL tags by scanning for validated entries
+    // MFC tag values depend on m_nMapCount (incremented for both classes AND objects),
+    // so tags vary per file. After the first instance (embedded in the FFFF class def),
+    // subsequent instances use 2-byte tags. The next entity after a class def may be
+    // a DIFFERENT type, so we cannot read senTag from the position after first CDataSen.
+    // Instead, discover all tags by validation.
+    function isReadableText(s) {
+      // Reject strings with too many non-printable/control characters (false positives)
+      var bad = 0;
+      for (var ci = 0; ci < s.length; ci++) {
+        var c = s.charCodeAt(ci);
+        // Control characters (0x00-0x1F except tab/newline) are bad indicators
+        if (c < 0x20 && c !== 0x09 && c !== 0x0A && c !== 0x0D) bad++;
       }
+      return bad === 0 && s.length >= 1; // no control characters at all
     }
 
-    // Parse first CDataEnko
-    if (enkDef > 0) {
-      var cd0a = parseCData(enkDef);
-      if (cd0a >= 0) {
-        var ao = cd0a + cdSz;
-        if (ao + 60 <= len) {
-          var acx = view.getFloat64(ao, true), acy = view.getFloat64(ao+8, true);
-          var ar = view.getFloat64(ao+16, true), asa = view.getFloat64(ao+24, true);
-          var aarcA = view.getFloat64(ao+32, true), atilt = view.getFloat64(ao+40, true);
-          var aflat = view.getFloat64(ao+48, true), afull = view.getUint32(ao+56, true);
-          if (isFinite(acx) && isFinite(acy) && isFinite(ar) && ar > 0 && ar <= 1e7 &&
-              Math.abs(acx) <= 1e7 && Math.abs(acy) <= 1e7) {
-            var isC = afull === 1 || Math.abs(Math.abs(aarcA) - Math.PI * 2) < 0.01;
-            addArc(acx, acy, ar, asa, asa+aarcA, atilt, aflat,
-                   getCDLayer(cd0a), getCDGlayer(cd0a), isC);
-          }
-        }
-      }
-    }
-
-    // Parse first CDataMoji
-    if (mojiDef > 0) {
-      var cdm0 = parseCData(mojiDef);
-      if (cdm0 >= 0) {
-        var mo = cdm0 + cdSz;
-        if (mo + 68 <= len) {
-          var mx1 = view.getFloat64(mo, true), my1 = view.getFloat64(mo+8, true);
-          var msX = view.getFloat64(mo+36, true), msY = view.getFloat64(mo+44, true);
-          var mkak = view.getFloat64(mo+60, true);
-          if (isFinite(mx1) && isFinite(my1) && Math.abs(mx1)<=1e7 && Math.abs(my1)<=1e7 &&
-              isFinite(msX) && msX > 0 && msX <= 10000 && isFinite(msY) && msY > 0 && msY <= 10000) {
-            var fontR0 = readCStr(mo + 68);
-            if (fontR0) {
-              var textR0 = readCStr(fontR0.end);
-              if (textR0 && textR0.text.length > 0) {
-                texts.push({x:mx1, y:my1, sz:Math.max(msX,msY), text:textR0.text, angle:mkak,
-                            layer:getCDLayer(cdm0), glayer:getCDGlayer(cdm0)});
-                seqStart = textR0.end;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // If mojiDef wasn't found, start from after enkDef or senDef
-    if (seqStart < 0 && enkDef > 0) seqStart = enkDef + cdSz + 60;
-    if (seqStart < 0 && senDef > 0) seqStart = senDef + cdSz + 32;
-
-    // Step 2: Discover enkTag and mojiTag by scanning for validated entries
-    // MFC tag values depend on both class and object counts, so they vary per file.
-    // We discover them by finding validated arc/text entries and checking their tag bytes.
-    function discoverTag(type, searchStart, searchEnd) {
+    function discoverMojiTag(searchStart, searchEnd, skipTags) {
       var tagCounts = {};
       var maxTag = -1, maxCount = 0;
-      var limit = Math.min(searchEnd, searchStart + 300000);
-      for (var di = searchStart; di < limit - 80; di++) {
+      // Search near class defs first (limited range to avoid CDataTen/CDataSunpou false positives)
+      var limit = Math.min(searchEnd, searchStart + 500000);
+      for (var di = searchStart; di < limit - 90; di++) {
         if (!(data[di+1] & 0x80)) continue;
         var dtag = data[di] | (data[di+1] << 8);
-        if (dtag === senTag) continue; // skip known tags
+        var skip = false;
+        for (var si = 0; si < skipTags.length; si++) { if (dtag === skipTags[si]) { skip = true; break; } }
+        if (skip) continue;
         var dcd = parseCData(di + 2);
         if (dcd < 0) continue;
         var dao = dcd + cdSz;
 
-        if (type === 'arc' && dao + 60 <= len) {
-          var dcx = view.getFloat64(dao, true), dcy = view.getFloat64(dao+8, true);
-          var dr = view.getFloat64(dao+16, true);
-          if (isFinite(dcx) && isFinite(dcy) && isFinite(dr) && dr > 0 && dr <= 1e7 &&
-              Math.abs(dcx) <= 1e7 && Math.abs(dcy) <= 1e7) {
-            var nextP = dao + 60;
-            if (nextP + 1 < limit && (data[nextP+1] & 0x80)) {
-              var ncd = parseCData(nextP + 2);
-              if (ncd >= 0) {
-                tagCounts[dtag] = (tagCounts[dtag] || 0) + 1;
-                if (tagCounts[dtag] > maxCount) { maxCount = tagCounts[dtag]; maxTag = dtag; }
-              }
-            }
-          }
-        }
-
-        if (type === 'text' && dao + 68 <= len) {
+        if (dao + 68 <= len) {
           var dmx = view.getFloat64(dao, true), dmy = view.getFloat64(dao+8, true);
           var dmsx = view.getFloat64(dao+36, true);
           if (isFinite(dmx) && isFinite(dmy) && Math.abs(dmx)<=1e7 && Math.abs(dmy)<=1e7 &&
@@ -504,7 +433,7 @@ var WORKER_CODE = function() {
             var dfr = readCStr(dao + 68);
             if (dfr) {
               var dtr = readCStr(dfr.end);
-              if (dtr && dtr.text.length > 0 && dtr.text.length < 1000) {
+              if (dtr && dtr.text.length > 0 && dtr.text.length < 1000 && isReadableText(dtr.text)) {
                 tagCounts[dtag] = (tagCounts[dtag] || 0) + 1;
                 if (tagCounts[dtag] > maxCount) { maxCount = tagCounts[dtag]; maxTag = dtag; }
               }
@@ -512,25 +441,95 @@ var WORKER_CODE = function() {
           }
         }
       }
-      return maxCount >= 3 ? maxTag : -1; // require at least 3 matches
+      return maxCount >= 3 ? maxTag : -1;
     }
 
+    // Discover senTag and enkTag by finding consecutive same-tag entities.
+    // CDataSen = tag(2)+CData(15)+32 = 49 bytes; CDataEnko = tag(2)+CData(15)+60 = 77 bytes.
+    // If same tag appears at pos and pos+49, it's a line tag (stride=49).
+    // If same tag appears at pos and pos+77, it's an arc tag (stride=77).
     if (seqStart > 0) {
-      enkTag = discoverTag('arc', seqStart, scanEnd);
-      mojiTag = discoverTag('text', seqStart, scanEnd);
+      var lineStride = 2 + cdSz + 32; // 49 for v700
+      var arcStride = 2 + cdSz + 60;  // 77 for v700
+      var lineCands = {}, arcCands = {};
+      var dlimit = Math.min(scanEnd, seqStart + 2000000);
+
+      for (var di = seqStart; di < dlimit - arcStride - 2; di++) {
+        if (!(data[di+1] & 0x80)) continue;
+        var dtag = data[di] | (data[di+1] << 8);
+        var dcd = parseCData(di + 2);
+        if (dcd < 0) continue;
+
+        // Check line stride: same tag at pos + lineStride?
+        var lnext = di + lineStride;
+        if (lnext + 1 < dlimit && (data[lnext] | (data[lnext+1] << 8)) === dtag) {
+          var lcd = parseCData(lnext + 2);
+          if (lcd >= 0) {
+            lineCands[dtag] = (lineCands[dtag] || 0) + 1;
+          }
+        }
+
+        // Check arc stride: same tag at pos + arcStride?
+        var anext = di + arcStride;
+        if (anext + 1 < dlimit && (data[anext] | (data[anext+1] << 8)) === dtag) {
+          var acd2 = parseCData(anext + 2);
+          if (acd2 >= 0) {
+            arcCands[dtag] = (arcCands[dtag] || 0) + 1;
+          }
+        }
+      }
+
+      // Best line tag: highest count in lineCands that isn't a better arc candidate
+      var bestLineTag = -1, bestLineCount = 0;
+      for (var lt in lineCands) {
+        var ltv = parseInt(lt);
+        if (lineCands[lt] > bestLineCount && (!(lt in arcCands) || lineCands[lt] > arcCands[lt])) {
+          bestLineCount = lineCands[lt]; bestLineTag = ltv;
+        }
+      }
+      // Best arc tag: highest count in arcCands (excluding senTag)
+      var bestArcTag = -1, bestArcCount = 0;
+      for (var at in arcCands) {
+        var atv = parseInt(at);
+        if (atv !== bestLineTag && arcCands[at] > bestArcCount) {
+          bestArcCount = arcCands[at]; bestArcTag = atv;
+        }
+      }
+
+      senTag = bestLineTag;
+      enkTag = bestArcTag;
+      mojiTag = discoverMojiTag(seqStart, scanEnd, [senTag, enkTag]);
+      self.postMessage({type: 'progress', pct: 12,
+        detail: 'tags: sen=0x' + (senTag>0?senTag.toString(16):'-') + ' enk=0x' + (enkTag>0?enkTag.toString(16):'-') + ' moji=0x' + (mojiTag>0?mojiTag.toString(16):'-')});
     }
 
     // Step 3: Sequential stream parsing with discovered tags
 
+    // Build a fast lookup: for each known tag's low byte, scan for it
+    // Tags are 2 bytes: lowByte | (highByte << 8), where highByte has bit 0x80 set
+    var senLo = senTag > 0 ? (senTag & 0xFF) : -1;
+    var enkLo = enkTag > 0 ? (enkTag & 0xFF) : -1;
+    var mojiLo = mojiTag > 0 ? (mojiTag & 0xFF) : -1;
+
     if (seqStart > 0 && seqStart < scanEnd) {
       var pos = seqStart;
       var lastPct = 10;
-      var missCount = 0; // consecutive misses for recovery
+      var progCounter = 0;
 
       while (pos < scanEnd - 2) {
-        var t = data[pos] | (data[pos+1] << 8);
+        // Fast skip: jump to next byte that could be a tag low-byte
+        var lo = data[pos];
+        var hi = data[pos + 1];
 
-        if (t === senTag && senTag > 0) {
+        if (!(hi & 0x80)) {
+          // Not a valid MFC tag (high bit must be set) - skip ahead
+          pos++;
+          continue;
+        }
+
+        var t = lo | (hi << 8);
+
+        if (t === senTag) {
           // CDataSen (line): tag(2) + CData(cdSz) + 4 doubles(32)
           var scd = parseCData(pos + 2);
           if (scd >= 0) {
@@ -545,12 +544,11 @@ var WORKER_CODE = function() {
                 addLine(lx1, ly1, lx2, ly2, getCDLayer(scd), getCDGlayer(scd));
             }
             pos = so + 32;
-            missCount = 0;
             continue;
           }
         }
 
-        if (t === enkTag && enkTag > 0) {
+        if (t === enkTag) {
           // CDataEnko (arc): tag(2) + CData(cdSz) + 60 bytes
           var acd = parseCData(pos + 2);
           if (acd >= 0) {
@@ -567,12 +565,11 @@ var WORKER_CODE = function() {
                      getCDLayer(acd), getCDGlayer(acd), isC2);
             }
             pos = ao2 + 60;
-            missCount = 0;
             continue;
           }
         }
 
-        if (t === mojiTag && mojiTag > 0) {
+        if (t === mojiTag) {
           // CDataMoji (text): tag(2) + CData(cdSz) + 68 bytes + fontStr + textStr
           var mcd = parseCData(pos + 2);
           if (mcd >= 0) {
@@ -590,7 +587,6 @@ var WORKER_CODE = function() {
                   texts.push({x:mx, y:my, sz:Math.max(msx,msy), text:tr.text, angle:mk,
                               layer:getCDLayer(mcd), glayer:getCDGlayer(mcd)});
                   pos = tr.end;
-                  missCount = 0;
                   continue;
                 }
               }
@@ -598,23 +594,17 @@ var WORKER_CODE = function() {
           }
         }
 
-        // Unknown tag or failed parse - skip 1 byte and try again
         pos++;
-        missCount++;
 
-        // If we've missed too many consecutive bytes, we might be in a gap
-        // Skip ahead more aggressively after many misses
-        if (missCount > 200) {
-          pos += 10;
-          missCount = 0;
-        }
-
-        // Progress reporting
-        var pct = 10 + Math.round((pos - seqStart) / (scanEnd - seqStart) * 75);
-        if (pct > lastPct + 4) {
-          lastPct = pct;
-          self.postMessage({type: 'progress', pct: pct,
-            detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length});
+        // Progress reporting (throttled)
+        if (++progCounter > 100000) {
+          progCounter = 0;
+          var pct = 10 + Math.round((pos - seqStart) / (scanEnd - seqStart) * 75);
+          if (pct > lastPct + 2) {
+            lastPct = pct;
+            self.postMessage({type: 'progress', pct: pct,
+              detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length});
+          }
         }
       }
     }
@@ -1241,6 +1231,7 @@ function loadFile(file) {
         document.getElementById('fname').textContent = file.name +
           ' (\u7DDA:' + LINE_COUNT + ' \u5F27:' + ARC_COUNT + ' \u5B57:' + TEXTS.length +
           ' v' + (r.version || '?') + ')';
+
 
         loading.style.display = 'none';
         currentWorker = null;
