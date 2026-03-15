@@ -612,28 +612,25 @@ var WORKER_CODE = function() {
     self.postMessage({type: 'progress', pct: 85,
       detail: '\u7DDA:' + lineCount + ' \u5F27:' + arcCount + ' \u5B57:' + texts.length + ' \u5B8C\u4E86'});
 
-    // ===== Build snap points (limited) =====
-    var SNAP_LIMIT = 15000;
+    // ===== Build snap points =====
+    var SNAP_LIMIT = 200000;
     var snapCount = 0;
-    var snapCoords = null;
-    if (lineCount <= SNAP_LIMIT) {
-      var snapSet = {};
-      var snapBuf = new Float64Array(Math.min(lineCount * 4, SNAP_LIMIT * 2) * 2);
-      for (var sli = 0; sli < lineCount && snapCount < SNAP_LIMIT; sli++) {
-        var si4 = sli * 4;
-        for (var sp = 0; sp < 2 && snapCount < SNAP_LIMIT; sp++) {
-          var skx = lineCoords[si4 + sp*2], sky = lineCoords[si4 + sp*2 + 1];
-          var sk = (Math.round(skx * 10)|0) + ',' + (Math.round(sky * 10)|0);
-          if (!snapSet[sk]) {
-            snapSet[sk] = 1;
-            snapBuf[snapCount * 2] = skx;
-            snapBuf[snapCount * 2 + 1] = sky;
-            snapCount++;
-          }
+    var snapSet = {};
+    var snapBuf = new Float64Array(Math.min(lineCount * 4, SNAP_LIMIT * 2) * 2);
+    for (var sli = 0; sli < lineCount && snapCount < SNAP_LIMIT; sli++) {
+      var si4 = sli * 4;
+      for (var sp = 0; sp < 2 && snapCount < SNAP_LIMIT; sp++) {
+        var skx = lineCoords[si4 + sp*2], sky = lineCoords[si4 + sp*2 + 1];
+        var sk = (Math.round(skx * 10)|0) + ',' + (Math.round(sky * 10)|0);
+        if (!snapSet[sk]) {
+          snapSet[sk] = 1;
+          snapBuf[snapCount * 2] = skx;
+          snapBuf[snapCount * 2 + 1] = sky;
+          snapCount++;
         }
       }
-      snapCoords = snapBuf.subarray(0, snapCount * 2);
     }
+    var snapCoords = snapBuf.subarray(0, snapCount * 2);
     self.postMessage({type: 'progress', pct: 95, detail: 'snap: ' + snapCount + '\u70B9'});
 
     // Build layer-sorted indices for O(1) per-layer iteration
